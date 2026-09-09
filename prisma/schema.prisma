@@ -80,6 +80,21 @@ enum RestrictedPermission {
   CREDENTIAL_EXPORT
 }
 
+/// UX01: "Provide Light, Dark and System settings saved per user." SYSTEM is
+/// a real third value, not the absence of a choice — a user who wants to
+/// follow the OS has chosen that, and it must survive a device change.
+enum ThemePreference {
+  LIGHT
+  DARK
+  SYSTEM
+}
+
+/// UX02: "optional comfortable density".
+enum Density {
+  COMFORTABLE
+  COMPACT
+}
+
 enum UserStatus {
   INVITED
   ACTIVE
@@ -94,10 +109,11 @@ model Tenant {
   updatedAt DateTime  @updatedAt
   archivedAt DateTime?
 
-  practiceGroups PracticeGroup[]
-  practices      Practice[]
-  parties        Party[]
-  events         Event[]
+  practiceGroups   PracticeGroup[]
+  practices        Practice[]
+  parties          Party[]
+  events           Event[]
+  messageTemplates MessageTemplate[]
 }
 
 // ORG01: BHV initially uses one group with two practices. The group exists
@@ -172,9 +188,15 @@ model Practice {
   invoices            Invoice[]
   receipts            Receipt[]
   allocations         ReceiptAllocation[]
+  outboundMessages    OutboundMessage[]
   approvals           Approval[]
   selfReviewExceptions SelfReviewException[]
+  dscCustodyRecords   DscCustodyRecord[]
   events              Event[]
+  documentIntakes     DocumentIntake[]
+  documentSets        DocumentSet[]
+  retentionPolicies   RetentionPolicy[]
+  legalHolds          LegalHold[]
 
   // IAM04: invoices above this value require independent review.
   invoiceApprovalThreshold Decimal @default(0) @db.Decimal(18, 2)
@@ -384,14 +406,23 @@ model User {
   suspendedAt        DateTime?
   suspendedReason    String?
 
+  // UX01/UX02 display preferences, saved per user. Presentation only — they
+  // carry no authority and are deliberately not part of any access decision.
+  themePreference   ThemePreference @default(SYSTEM)
+  densityPreference Density         @default(COMFORTABLE)
+
   deactivatedAt DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  memberships PracticeMembership[]
-  sessions    Session[]
-  queuedJobs  QueuedJob[]
-  events      Event[]
+  memberships   PracticeMembership[]
+  sessions      Session[]
+  queuedJobs    QueuedJob[]
+  credential    UserCredential?
+  mfaEnrolments MfaEnrolment[]
+  recoveryCodes MfaRecoveryCode[]
+  recoveryRequests RecoveryRequest[]
+  events        Event[]
 }
 
 // IAM03: an explicit, reasoned, expiring grant over a restricted area.
@@ -423,16 +454,208 @@ model Session {
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
-  createdAt     DateTime  @default(now())
-  lastSeenAt    DateTime  @default(now())
-  idleExpiresAt DateTime
+  // AUTH02: the cookie carries a random token; only its SHA-256 lives here,
+  // so a database or backup copy cannot be replayed as a live session.
+  tokenHash String @unique
+
+  deviceLabel String?
+  userAgent   String?
+
+  createdAt         DateTime  @default(now())
+  lastSeenAt        DateTime  @default(now())
+  idleExpiresAt     DateTime
   absoluteExpiresAt DateTime
-  mfaVerifiedAt DateTime?
+  mfaVerifiedAt     DateTime?
 
   revokedAt     DateTime?
   revokedReason String?
 
+  stepUps StepUpChallenge[]
+
   @@index([userId, revokedAt])
+}
+
+enum StepUpPurpose {
+  EXPORT
+  ROLE_CHANGE
+  SECRET_REVEAL
+}
+
+// AUTH02: "Step up authentication for exports, role changes and secret
+// reveal." A satisfied challenge is narrow and short-lived — it authorises
+// one purpose, not the rest of the session.
+model StepUpChallenge {
+  id        String  @id @default(uuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id])
+
+  purpose     StepUpPurpose
+  satisfiedAt DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime      @default(now())
+
+  @@index([sessionId, purpose])
+}
+
+enum MfaMethod {
+  TOTP
+  WEBAUTHN
+}
+
+// AUTH01. Password material is scrypt-derived; the plaintext never exists
+// outside the request that set it.
+model UserCredential {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id])
+
+  passwordHash      String
+  passwordUpdatedAt DateTime @default(now())
+  mustChangePassword Boolean @default(false)
+
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// AUTH01/AUTH02. The TOTP seed is encrypted at rest with a key held outside
+// the database (env/KMS), so a stolen dump does not yield working codes.
+model MfaEnrolment {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  method           MfaMethod @default(TOTP)
+  secretCiphertext String
+  secretIv         String
+  secretAuthTag    String
+
+  confirmedAt DateTime?
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  // Replay prevention: a code already spent in this time step is refused.
+  lastUsedStep BigInt?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, revokedAt])
+}
+
+// Hashed, single-use. A recovery code is shown once at generation and is
+// never recoverable from the database afterwards.
+model MfaRecoveryCode {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, usedAt])
+}
+
+// AUTH03: single-use, expiring (48 h default), delivered through an approved
+// channel. Crucially, an invitation names ONE practice — joining a known
+// email domain must never enrol a user in both.
+model Invitation {
+  id         String       @id @default(uuid())
+  email      String
+  practiceId String
+  role       PracticeRole
+
+  tokenHash String   @unique
+  expiresAt DateTime
+  channel   String
+
+  invitedByUserId String?
+  invitedByName   String
+  sponsorUserId   String?
+
+  acceptedAt      DateTime?
+  acceptedByUserId String?
+  revokedAt       DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([email, acceptedAt])
+  @@index([practiceId])
+}
+
+enum RecoveryKind {
+  PASSWORD_RESET
+  MFA_RESET
+}
+
+/// AUTH02: "Recovery is verified, logged and cannot silently remove MFA."
+/// An MFA reset therefore requires a named substitute approver — this is the
+/// documented process for when the owner is absent — and re-enrolment is
+/// forced rather than MFA simply being switched off.
+model RecoveryRequest {
+  id     String       @id @default(uuid())
+  userId String
+  user   User         @relation(fields: [userId], references: [id])
+  kind   RecoveryKind
+
+  tokenHash String   @unique
+  expiresAt DateTime
+  reason    String
+
+  requestedByName String
+
+  // The absent-owner path: a second, entitled person authorises it.
+  approverUserId String?
+  approverName   String?
+  approvedAt     DateTime?
+
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, kind])
+}
+
+/// AUTH05 — DSC custody register.
+///
+/// This table deliberately contains NO private key and NO token PIN. It
+/// records who holds which physical token and when, nothing that could be
+/// used to sign. A custody record does not authorise signing: the entitled
+/// person signs through a separately approved flow.
+model DscCustodyRecord {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  ownerName             String
+  certificateIdentifier String
+  issuedOn              DateTime @db.Date
+  expiresOn             DateTime @db.Date
+
+  custodianUserId String?
+  custodianName   String
+  issuedToCustodianAt DateTime?
+  returnedAt          DateTime?
+
+  purpose String
+  notes   String?
+
+  archivedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([id, practiceId])
+  @@index([practiceId, expiresOn])
+}
+
+// AUTH03: "Rate limit login and invitation attempts."
+model RateLimitCounter {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  windowStart DateTime
+  count       Int      @default(0)
+
+  @@index([windowStart])
 }
 
 enum QueuedJobState {
@@ -583,8 +806,31 @@ model Party {
   identifiers   PartyIdentifier[]
   contacts      Contact[]
   relationships ClientRelationship[]
+  groupParentOf PartyGroupLink[]     @relation("GroupParent")
+  groupChildOf  PartyGroupLink[]     @relation("GroupChild")
 
   @@index([tenantId, legalName])
+}
+
+// CLI03: "Imported PAN, GSTIN, bank details and email addresses remain
+// unverified until checked. Validation of format is not proof of identity or
+// registration status." Hence a status AND a source on every critical field —
+// a well-formed GSTIN is not a verified one.
+enum VerificationStatus {
+  UNVERIFIED
+  FORMAT_CHECKED
+  PENDING_VERIFICATION
+  VERIFIED
+  FAILED_VERIFICATION
+}
+
+enum FieldSource {
+  MANUAL_ENTRY
+  BULK_IMPORT
+  PORTAL_UPLOAD
+  CLIENT_DECLARATION
+  GOVERNMENT_PORTAL
+  DOCUMENT_EXTRACTION
 }
 
 model PartyIdentifier {
@@ -594,6 +840,15 @@ model PartyIdentifier {
   kind    IdentifierKind
   value   String
 
+  // A party may hold several GST registrations (one per state) without being
+  // duplicated as a party — CLI01.
+  stateCode String?
+  label     String?
+
+  verificationStatus VerificationStatus @default(UNVERIFIED)
+  source             FieldSource        @default(MANUAL_ENTRY)
+  sourceEvidence     String?
+
   verifiedAt    DateTime?
   verifiedBy    String?
   effectiveFrom DateTime  @db.Date
@@ -601,6 +856,27 @@ model PartyIdentifier {
   archivedAt    DateTime?
 
   @@unique([partyId, kind, value, effectiveFrom])
+  @@index([kind, value])
+}
+
+// CLI01 group links / CLI06: "client groups are navigational links, not
+// automatic access grants." Nothing in the scope guard consults this table.
+model PartyGroupLink {
+  id       String @id @default(uuid())
+  tenantId String
+
+  parentPartyId String
+  parentParty   Party  @relation("GroupParent", fields: [parentPartyId], references: [id])
+  childPartyId  String
+  childParty    Party  @relation("GroupChild", fields: [childPartyId], references: [id])
+
+  relationshipType String
+  effectiveFrom    DateTime  @db.Date
+  effectiveTo      DateTime? @db.Date
+  archivedAt       DateTime?
+
+  @@unique([parentPartyId, childPartyId, relationshipType])
+  @@index([tenantId])
 }
 
 model Contact {
@@ -610,11 +886,122 @@ model Contact {
   fullName String
   email    String?
   phone    String?
+  designation String?
+
+  // CLI01 "verified communication channels" — a channel is not trusted for
+  // sending statutory correspondence until it has been checked.
+  emailVerificationStatus VerificationStatus @default(UNVERIFIED)
+  phoneVerificationStatus VerificationStatus @default(UNVERIFIED)
+  source                  FieldSource        @default(MANUAL_ENTRY)
+
   archivedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  authorities ContactAuthority[]
+  authorities       ContactAuthority[]
+  changeRequests    ContactChangeRequest[]
+  releaseRecipients DocumentReleaseRecipient[]
+}
+
+enum ChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Acceptance evidence: "Reject an unauthorised email change; retain source
+/// evidence."
+///
+/// A contact's email is how statutory correspondence and portal access reach
+/// the client, so changing it is an attack worth staging. Changes therefore
+/// go through an authority check and are recorded either way — a REJECTED
+/// request is kept, with its evidence, precisely because the attempt matters.
+model ContactChangeRequest {
+  id         String   @id @default(uuid())
+  practiceId String
+  contactId  String
+  contact    Contact  @relation(fields: [contactId], references: [id])
+
+  field    String
+  oldValue String?
+  newValue String
+
+  requestedByUserId    String?
+  requestedByContactId String?
+  requestedByName      String
+  source               FieldSource
+  sourceEvidence       String?
+
+  status          ChangeRequestStatus @default(PENDING)
+  decidedByUserId String?
+  decidedByName   String?
+  decidedAt       DateTime?
+  decisionReason  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, status])
+  @@index([contactId, createdAt])
+}
+
+enum AcceptanceDecision {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+/// CLI04 — acceptance and conflict check.
+///
+/// Recorded BEFORE an engagement can become active. The conflict screen looks
+/// across both practices, but `conflictSummary` is written to be non-revealing:
+/// it says a related matter exists, not whose it is.
+model AcceptanceCheck {
+  id                   String             @id @default(uuid())
+  practiceId           String
+  clientRelationshipId String
+  clientRelationship   ClientRelationship @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+
+  scope                   String
+  competenceAssessment    String
+  resourcesAssessment     String
+  ethicalThreats          String
+  independenceAssessment  String?
+  predecessorCommunication String?
+  clientAuthority         String
+
+  // Counts and flags only — never the other practice's client names.
+  conflictSummary Json
+
+  decision        AcceptanceDecision @default(PENDING)
+  partnerUserId   String?
+  partnerName     String?
+  decidedAt       DateTime?
+  decisionReason  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([practiceId, decision])
+}
+
+/// CLI03 — "Collect only fields needed for the selected service. Save
+/// incomplete drafts."
+model IntakeDraft {
+  id         String @id @default(uuid())
+  practiceId String
+
+  serviceCode String
+  payload     Json
+  missingFields String[]
+
+  createdByUserId String
+  submittedAt     DateTime?
+  discardedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([practiceId, createdByUserId])
 }
 
 // One practice's relationship with one party. This is the record every
@@ -635,9 +1022,13 @@ model ClientRelationship {
   updatedAt        DateTime             @updatedAt
 
   contactAuthorities ContactAuthority[]
+  acceptanceChecks   AcceptanceCheck[]
+  clientRequests     ClientRequest[]
+  messageThreads     MessageThread[]
   engagements        Engagement[]
   obligations        Obligation[]
   documents          Document[]
+  documentIntakes    DocumentIntake[]
   invoices           Invoice[]
   receipts           Receipt[]
 
@@ -678,22 +1069,45 @@ enum EngagementState {
   TERMINATED
 }
 
-enum JobState {
-  NOT_STARTED
+// WRK02. Service templates may hide states they do not use, but the
+// underlying approval and evidence rules still apply to every one of them.
+enum WorkState {
+  DRAFT
+  READY
   IN_PROGRESS
-  BLOCKED
+  WAITING_FOR_CLIENT
+  WAITING_INTERNALLY
   IN_REVIEW
+  CHANGES_REQUESTED
+  APPROVED_FOR_ACTION
+  SUBMITTED_DELIVERED
   COMPLETED
   CANCELLED
+  REOPENED
 }
 
-enum TaskState {
-  NOT_STARTED
-  IN_PROGRESS
-  BLOCKED
-  IN_REVIEW
-  COMPLETED
-  CANCELLED
+enum WorkSubjectType {
+  JOB
+  TASK
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum EngagementKind {
+  ANNUAL_RETAINER
+  AD_HOC
+}
+
+enum ClosureKind {
+  COMPLETION
+  WITHDRAWAL
+  CANCELLATION
+  NOT_APPLICABLE
 }
 
 model Engagement {
@@ -707,6 +1121,28 @@ model Engagement {
   templateVersion String
   periodStart     DateTime @db.Date
   periodEnd       DateTime @db.Date
+
+  // ENG02 required particulars.
+  kind             EngagementKind @default(AD_HOC)
+  scope            String?
+  exclusions       String?
+  feeBasis         String?
+  billingEntityRegistrationId String?
+  plannedStartDate DateTime? @db.Date
+  plannedEndDate   DateTime? @db.Date
+
+  // ENG04: a post-acceptance change creates a REVISION. The original is kept
+  // and pointed at, never edited — "Preserve the original."
+  parentEngagementId String?
+  parent             Engagement?  @relation("EngagementRevision", fields: [parentEngagementId], references: [id])
+  revisions          Engagement[] @relation("EngagementRevision")
+  revisionNumber     Int          @default(0)
+  supersededAt       DateTime?
+
+  // ENG06.
+  closureKind            ClosureKind?
+  closureReason          String?
+  closureAuthorisedByName String?
 
   ownerUserId    String?
   reviewerUserId String?
@@ -728,10 +1164,177 @@ model Engagement {
   jobs        Job[]
   obligations Obligation[]
   documents   Document[]
+  documentIntakes DocumentIntake[]
   invoices    Invoice[]
+  letters     EngagementLetter[]
+  changes     EngagementChange[]
+  blocks      EngagementBlock[]
+  messageThreads MessageThread[]
 
   @@unique([id, practiceId])
   @@index([practiceId, state])
+}
+
+// ---------------------------------------------------------------------------
+// Service catalogue and engagement lifecycle (T08, PRD §12)
+// ---------------------------------------------------------------------------
+
+/// ENG01 — versioned service templates. A template version is PINNED onto an
+/// engagement at creation, so revising the catalogue never rewrites the terms
+/// work was accepted under (DAT02).
+model ServiceTemplate {
+  id       String @id @default(uuid())
+  tenantId String
+
+  code     String
+  version  Int
+  name     String
+  category String
+
+  applicabilityInputs Json
+  documentChecklist   Json
+  steps               Json
+  roles               Json
+  reviewGates         Json
+  deliverables        Json
+  feeModel            Json
+
+  effectiveFrom  DateTime  @db.Date
+  effectiveTo    DateTime? @db.Date
+  approvedByName String?
+  archivedAt     DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, code, version])
+  @@index([tenantId, code])
+}
+
+enum LetterReviewState {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  SENT
+}
+
+/// ENG03: "Typed consent, electronic acceptance and legally effective
+/// signature are distinct records." They are NOT interchangeable — a typed
+/// name in a web form is not a signature, and recording them as one field is
+/// how that distinction gets lost.
+enum AcceptanceKind {
+  TYPED_CONSENT
+  ELECTRONIC_ACCEPTANCE
+  LEGALLY_EFFECTIVE_SIGNATURE
+}
+
+model EngagementLetter {
+  id           String     @id @default(uuid())
+  practiceId   String
+  engagementId String
+  engagement   Engagement @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+
+  templateCode    String
+  templateVersion Int
+
+  /// The letter as generated, frozen. Populated only from verified facts.
+  bodySnapshot Json
+  bodyHash     String
+
+  reviewState      LetterReviewState @default(DRAFT)
+  reviewedByUserId String?
+  reviewedByName   String?
+  reviewedAt       DateTime?
+
+  sentAt      DateTime?
+  sentVersion Int?
+
+  acceptanceKind     AcceptanceKind?
+  acceptedAt         DateTime?
+  signatoryName      String?
+  signatoryCapacity  String?
+  acceptanceEvidence Json?
+
+  createdAt DateTime @default(now())
+
+  @@unique([id, practiceId])
+  @@index([practiceId, engagementId])
+}
+
+enum EngagementChangeType {
+  SCOPE
+  FEE
+  PERIOD
+  PRACTICE
+}
+
+enum ChangeStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+/// ENG04 — change control. Recorded against the ORIGINAL engagement, with the
+/// reviews the change triggers made explicit rather than left to judgement.
+model EngagementChange {
+  id           String     @id @default(uuid())
+  practiceId   String
+  engagementId String
+  engagement   Engagement @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+
+  changeType     EngagementChangeType
+  reason         String
+  beforeSnapshot Json
+  afterSnapshot  Json
+
+  /// A scope or fee change re-opens the fee basis and the authority to act.
+  requiresFeeReview       Boolean @default(false)
+  requiresAuthorityReview Boolean @default(false)
+  /// ENG04: reassigning the responsible legal practice needs documented client
+  /// arrangements — "changing a dropdown is insufficient".
+  requiresClientArrangements Boolean @default(false)
+  clientArrangementsEvidence String?
+
+  resultingEngagementId String?
+
+  status            ChangeStatus @default(PENDING_REVIEW)
+  requestedByUserId String?
+  requestedByName   String
+  approvedByUserId  String?
+  approvedByName    String?
+  approvedAt        DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, engagementId])
+}
+
+enum BlockKind {
+  INDEPENDENCE
+  ACCEPTANCE
+  FEE_APPROVAL
+  AUTHORITY
+}
+
+/// Activation gate. An engagement with an unresolved block cannot become
+/// ACTIVE. Independence blocks additionally require an ELIGIBLE reviewer —
+/// the engagement owner cannot clear their own independence question.
+model EngagementBlock {
+  id           String     @id @default(uuid())
+  practiceId   String
+  engagementId String
+  engagement   Engagement @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+
+  kind         BlockKind
+  reason       String
+  raisedByName String
+  raisedAt     DateTime  @default(now())
+
+  resolvedByUserId String?
+  resolvedByName   String?
+  resolvedAt       DateTime?
+  resolution       String?
+
+  @@index([practiceId, engagementId, resolvedAt])
 }
 
 model Job {
@@ -744,22 +1347,39 @@ model Job {
   title    String
   periodKey String
 
-  // WRK02 recurrence: running the generator twice must not double-create.
+  /// WRK03 duplicate-prevention identity: practice + client relationship +
+  /// stable template/obligation identity + period. The template VERSION is
+  /// deliberately NOT part of this — see templateVersionSnapshot below.
   dedupKey String
 
-  state   JobState @default(NOT_STARTED)
+  /// WRK03: "Store template version as snapshot metadata, not as the
+  /// duplicate prevention identity." If the version were part of the key,
+  /// editing a template would silently regenerate every open job.
+  templateVersionSnapshot Json?
+
+  obligationId String?
+
+  state   WorkState @default(READY)
   version Int      @default(0)
+
+  priority        Priority @default(NORMAL)
+  estimateMinutes Int?
+  tags            String[]
 
   ownerUserId    String?
   reviewerUserId String?
   dueDate        DateTime? @db.Date
 
   completedAt DateTime?
+  reopenCount Int       @default(0)
   archivedAt  DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  tasks Task[]
+  tasks          Task[]
+  clientRequests ClientRequest[]
+  timeEntries    TimeEntry[]
+  messageThreads MessageThread[]
 
   @@unique([id, practiceId])
   @@unique([practiceId, dedupKey])
@@ -774,9 +1394,13 @@ model Task {
   job        Job      @relation(fields: [jobId, practiceId], references: [id, practiceId])
 
   title       String
-  state       TaskState @default(NOT_STARTED)
+  state       WorkState @default(READY)
   version     Int       @default(0)
   assigneeUserId String?
+  reviewerUserId String?
+  priority       Priority @default(NORMAL)
+  estimateMinutes Int?
+  tags           String[]
   dueDate     DateTime? @db.Date
 
   completedAt DateTime?
@@ -801,7 +1425,15 @@ model ChecklistItem {
   label       String
   isComplete  Boolean  @default(false)
   completedAt DateTime?
+  completedByUserId String?
   sortOrder   Int      @default(0)
+
+  /// WRK01: "Required steps can be completed only by the authorised role;
+  /// optional steps record Not applicable with reason."
+  isRequired         Boolean       @default(true)
+  requiredRole       PracticeRole?
+  notApplicable      Boolean       @default(false)
+  notApplicableReason String?
 
   @@index([practiceId])
 }
@@ -816,21 +1448,216 @@ model TaskDependency {
   dependsOnTaskId String
   dependsOnTask   Task   @relation("BlockingTask", fields: [dependsOnTaskId, practiceId], references: [id, practiceId])
 
+  /// WRK04: a dependency may also be on EVIDENCE rather than another task —
+  /// e.g. the signed management representation letter must exist before the
+  /// audit report can be released.
+  requiredEvidenceLabel String?
+  evidenceDocumentId    String?
+
   @@unique([taskId, dependsOnTaskId])
   @@index([practiceId])
+}
+
+/// WRK02 + the reopen requirement.
+///
+/// "Reopen a completed job without changing its original filing evidence or
+///  deleting its completion history."
+///
+/// Completion history therefore lives here, not in a mutable field on the job.
+/// Reopening appends a transition; it never erases the earlier COMPLETED one.
+model WorkStateTransition {
+  id         String          @id @default(uuid())
+  practiceId String
+  subjectType WorkSubjectType
+  subjectId   String
+
+  fromState WorkState
+  toState   WorkState
+
+  actorUserId String?
+  actorName   String
+  reason      String?
+
+  /// The subject's version at the moment of transition, so an approval can be
+  /// tied to exactly what was approved (API02).
+  subjectVersion Int
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, subjectType, subjectId, createdAt])
+}
+
+enum ClientRequestState {
+  OPEN
+  SENT
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+/// WRK01 keeps Client Request separate from Task deliberately: an outstanding
+/// item owed BY the client is not a piece of internal work, and conflating
+/// them is how "waiting for the client" becomes invisible.
+model ClientRequest {
+  id                   String             @id @default(uuid())
+  practiceId           String
+  clientRelationshipId String
+  clientRelationship   ClientRelationship @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+
+  engagementId String?
+  jobId        String?
+  job          Job?    @relation(fields: [jobId, practiceId], references: [id, practiceId])
+
+  title          String
+  detail         String?
+  requestedItems Json
+
+  /// COM02: whether an item's reminder stops when a file ARRIVES or only once
+  /// staff have accepted it. Configured per request, because "we have it" and
+  /// "it is usable" are different claims and the difference matters at a
+  /// statutory deadline.
+  closeRule RequestCloseRule @default(ON_ACCEPTANCE)
+
+  state    ClientRequestState @default(OPEN)
+  dueDate  DateTime?          @db.Date
+  sentAt   DateTime?
+  receivedAt DateTime?
+  closedAt DateTime?
+
+  /// WRK04: a client delay pauses the INTERNAL response clock only, under the
+  /// defined SLA. It never moves the statutory deadline — that stays on the
+  /// Obligation, untouched.
+  slaPausedAt      DateTime?
+  slaPausedTotalMs Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items ClientRequestItem[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, state])
+  @@index([practiceId, dueDate])
+}
+
+/// The R0 sliver of time tracking needed by WRK05 — a reassignment must
+/// account for a timer left running. Full time and capacity reporting is R1.
+model TimeEntry {
+  id         String @id @default(uuid())
+  practiceId String
+
+  jobId  String?
+  job    Job?    @relation(fields: [jobId, practiceId], references: [id, practiceId])
+  taskId String?
+
+  userId    String
+  startedAt DateTime  @default(now())
+  stoppedAt DateTime?
+  minutes   Int?
+  note      String?
+
+  @@index([practiceId, userId, stoppedAt])
+}
+
+/// WRK05: "Reassign with reason and notification; include active timers and
+/// pending approvals. Employee exit generates a handover list, not orphaned
+/// jobs."
+model WorkReassignment {
+  id          String          @id @default(uuid())
+  practiceId  String
+  subjectType WorkSubjectType
+  subjectId   String
+
+  fromUserId String?
+  toUserId   String
+  reason     String
+
+  actorUserId String?
+  actorName   String
+
+  /// Carried across explicitly rather than left dangling under the old owner.
+  activeTimerIds        String[]
+  pendingApprovalsCount Int      @default(0)
+  notifiedAt            DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, subjectType, subjectId])
+  @@index([practiceId, toUserId])
 }
 
 // ---------------------------------------------------------------------------
 // Obligation / rule
 // ---------------------------------------------------------------------------
 
+// DUE04 status set. REVIEW_REQUIRED comes from DUE02: "Store Unknown
+// applicability as a review state, not as Not applicable" — the two must never
+// be conflated, because "not applicable" silently removes a deadline that may
+// in fact apply.
 enum ObligationStatus {
   REVIEW_REQUIRED
   OPEN
-  IN_PROGRESS
+  DUE_SOON
+  OVERDUE
+  WAITING
+  SUBMITTED_AWAITING_ACK
   FILED
+  REJECTED
   NOT_APPLICABLE
   CANCELLED
+}
+
+// DUE01 rule lifecycle.
+enum RuleStatus {
+  DRAFT
+  REVIEWED
+  ACTIVE
+  SUPERSEDED
+  RETIRED
+}
+
+/// The PRD's closing note for §14: "Preserve both income tax regimes:
+/// FY 2025-26 / AY 2026-27 uses the 1961 Act; Tax Year 2026-27 uses the 2025
+/// Act. Filing date alone must not choose the Act. Store law, assessment year
+/// and tax year independently."
+enum GoverningLaw {
+  INCOME_TAX_ACT_1961
+  INCOME_TAX_ACT_2025
+  CGST_ACT_2017
+  COMPANIES_ACT_2013
+  LLP_ACT_2008
+  OTHER
+}
+
+enum TaxpayerCategory {
+  INDIVIDUAL
+  HUF
+  FIRM
+  LLP
+  COMPANY_PRIVATE
+  COMPANY_PUBLIC
+  TRUST
+  AOP_BOI
+  COOPERATIVE
+  AUDIT_CASE
+  NON_AUDIT_CASE
+  TRANSFER_PRICING_CASE
+}
+
+enum AlertKindDue {
+  DUE_SOON
+  OVERDUE
+  ESCALATION
+  CATCH_UP
+}
+
+enum DeliveryState {
+  PENDING
+  SENT
+  DELIVERED
+  BOUNCED
+  FAILED
 }
 
 // Tenant-wide statutory rule, versioned. DAT02: a new statutory position is
@@ -841,17 +1668,38 @@ model ObligationRule {
   version Int
   source  String
 
+  // DUE01 particulars.
+  jurisdiction     String           @default("IN")
+  governingLaw     GoverningLaw     @default(OTHER)
+  service          String?
+  taxpayerCategory TaxpayerCategory?
+  relevantPeriod   String?
+  formVersion      String?
+
+  /// How the statutory date is derived, e.g. "20th of the month following the
+  /// period". Held as an expression so the derivation is auditable rather than
+  /// a bare date someone typed.
+  dueDateExpression String?
+
+  authoritativeSource String?
+  sourceDate          DateTime? @db.Date
+  approvingCaName     String?
+
   // Taxpayer-class criteria an extension or applicability test matches on.
   applicability Json
+
+  status RuleStatus @default(DRAFT)
 
   effectiveFrom DateTime  @db.Date
   effectiveTo   DateTime? @db.Date
   archivedAt    DateTime?
   createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt @default(now())
 
   obligations Obligation[]
 
   @@unique([code, version])
+  @@index([status, jurisdiction])
 }
 
 model Obligation {
@@ -868,10 +1716,25 @@ model Obligation {
   ruleVersion Int
   periodKey   String
 
+  // DUE02: "Separate law, internal planning, client submission and payment
+  // dates." Collapsing these into one field is how an internal target quietly
+  // becomes the date people believe is statutory.
   // DAT01: statutory dates are date-only values, not instants.
   originalStatutoryDate DateTime  @db.Date
   currentStatutoryDate  DateTime  @db.Date
   internalTargetDate    DateTime? @db.Date
+  reviewTargetDate      DateTime? @db.Date
+  clientDocumentCutoff  DateTime? @db.Date
+  paymentDeadline       DateTime? @db.Date
+
+  /// Stored INDEPENDENTLY, per the PRD: the filing date alone must never be
+  /// what selects which Act applies. A return filed in 2026 could be under
+  /// either the 1961 Act (AY 2026-27) or the 2025 Act (Tax Year 2026-27).
+  governingLaw     GoverningLaw?
+  assessmentYear   String?
+  taxYear          String?
+  taxpayerCategory TaxpayerCategory?
+  formVersion      String?
 
   // DUE04: an obligation whose category cannot be determined stays here
   // rather than silently defaulting to a date.
@@ -883,13 +1746,19 @@ model Obligation {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  changes ObligationChange[]
+  changes        ObligationChange[]
+  alerts         ObligationAlert[]
+  filingEvidence FilingEvidence[]
+  documents      Document[]
 
   @@unique([id, practiceId])
   @@unique([practiceId, clientRelationshipId, ruleId, periodKey])
   @@index([practiceId, currentStatutoryDate])
 }
 
+/// DUE02: "Show the source and reason for each revision." Every movement of a
+/// statutory date is recorded with what authorised it — so the audit trail can
+/// show BOTH the original and the current date, and where the change came from.
 model ObligationChange {
   id           String     @id @default(uuid())
   obligationId String
@@ -901,9 +1770,121 @@ model ObligationChange {
   beforeMeta        Json
   afterMeta         Json
   approvedByUserId  String?
+
+  sourceReference String?
+  extensionId     String?
+  extension       StatutoryExtension? @relation(fields: [extensionId], references: [id])
+
   createdAt         DateTime @default(now())
 
   @@index([obligationId, createdAt])
+}
+
+enum ExtensionStatus {
+  DRAFT
+  PREVIEWED
+  APPLIED
+  WITHDRAWN
+}
+
+/// DUE03 — extensions.
+///
+/// "An approved notification produces a preview of affected open instances.
+///  Apply only to matching category, period and jurisdiction. Preserve old
+///  values and linked source. Do not reopen completed filings automatically."
+///
+/// The matching fields below are nullable and mean "any" when unset, so a
+/// notification that applies to one taxpayer class cannot accidentally sweep
+/// up everything.
+model StatutoryExtension {
+  id       String @id @default(uuid())
+  tenantId String
+
+  notificationReference String
+  authoritativeSource   String?
+  sourceDate            DateTime @db.Date
+
+  // Matching criteria.
+  jurisdiction     String            @default("IN")
+  governingLaw     GoverningLaw?
+  ruleCode         String?
+  taxpayerCategory TaxpayerCategory?
+  periodKey        String?
+  formVersion      String?
+
+  originalDate DateTime @db.Date
+  extendedDate DateTime @db.Date
+
+  status          ExtensionStatus @default(DRAFT)
+  approvedByName  String?
+  approvedAt      DateTime?
+  previewedAt     DateTime?
+  appliedAt       DateTime?
+  appliedCount    Int             @default(0)
+
+  createdAt DateTime @default(now())
+
+  changes ObligationChange[]
+
+  @@index([tenantId, status])
+}
+
+/// DUE04 — alerts and evidence.
+///
+/// Delivery state matters as much as the alert itself: "A bounced reminder
+/// never becomes evidence of client receipt." Only DELIVERED plus an explicit
+/// acknowledgement counts.
+model ObligationAlert {
+  id           String     @id @default(uuid())
+  practiceId   String
+  obligationId String
+  obligation   Obligation @relation(fields: [obligationId], references: [id])
+
+  kind            AlertKindDue
+  escalationLevel Int          @default(0)
+  responsibleRole PracticeRole?
+
+  dueAt  DateTime
+  sentAt DateTime?
+
+  deliveryState   DeliveryState @default(PENDING)
+  deliveryDetail  String?
+
+  acknowledgedAt     DateTime?
+  acknowledgedByUserId String?
+  acknowledgedByName String?
+
+  /// DUE06: a missed scheduler run must produce catch-up alerts WITHOUT
+  /// duplicates, so each alert occurrence has a stable key.
+  dedupKey String
+
+  createdAt DateTime @default(now())
+
+  @@unique([dedupKey])
+  @@index([practiceId, kind, dueAt])
+}
+
+/// DUE04: "Filing completion requires acknowledgement / reference evidence and
+/// reviewer confirmation; marking a task Done is insufficient."
+model FilingEvidence {
+  id           String     @id @default(uuid())
+  practiceId   String
+  obligationId String
+  obligation   Obligation @relation(fields: [obligationId], references: [id])
+
+  acknowledgementReference String
+  filedAt                  DateTime
+  portalResponse           Json?
+  documentVersionId        String?
+  sourceFileSha256         String?
+
+  reviewerUserId      String?
+  reviewerName        String
+  reviewerConfirmedAt DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, obligationId])
 }
 
 // ---------------------------------------------------------------------------
@@ -923,6 +1904,84 @@ enum ScanVerdict {
   CLEAN
   INFECTED
   UNSUPPORTED_TYPE
+  // DOC01: "quarantine suspicious files". Suspicious is not the same as
+  // infected — a declared/detected MIME mismatch or a decompression bomb has
+  // no virus signature but must never reach the document store either.
+  SUSPICIOUS
+  // The scanner was unreachable. Fail CLOSED: an unscanned file is withheld,
+  // never optimistically admitted.
+  SCAN_UNAVAILABLE
+}
+
+// DOC04: "Separate internal, client supplied and approved client deliverable
+// records." These are different record classes, not a display flag — the
+// release path and the retention class both key off this.
+enum DocumentKind {
+  INTERNAL
+  CLIENT_SUPPLIED
+  APPROVED_DELIVERABLE
+}
+
+enum IntakeOutcome {
+  ACCEPTED
+  QUARANTINED
+  REJECTED
+}
+
+// DOC01: "show actionable rejection reasons". A coded reason so the message
+// shown to the uploader is stable and translatable, plus free-text detail.
+enum RejectionReason {
+  NONE
+  DISALLOWED_TYPE
+  MIME_MISMATCH
+  TOO_LARGE
+  EMPTY_FILE
+  DECOMPRESSION_LIMIT
+  ENCRYPTED_ARCHIVE
+  // The PRD names this outcome directly: "Quarantine a malformed archive."
+  // An archive whose own directory cannot be read is not a clean file that
+  // happens to be broken — it is a file whose contents cannot be checked.
+  MALFORMED_ARCHIVE
+  MALWARE_SIGNATURE
+  SCANNER_UNAVAILABLE
+}
+
+// DOC02: "Capture preparer, reviewer and status."
+enum VersionStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  SUPERSEDED
+  WITHDRAWN
+}
+
+// DOC02: an OCR pass, a PDF conversion or a redaction produces a NEW
+// derivative version. It never rewrites the original it was derived from.
+enum DerivationKind {
+  ORIGINAL
+  OCR
+  CONVERSION
+  REDACTION
+  COMPRESSION
+}
+
+enum ClassificationStatus {
+  DRAFT
+  CONFIRMED
+  REJECTED
+  CORRECTED
+}
+
+enum DocumentSetState {
+  OPEN
+  FINALISED
+}
+
+enum DeletionState {
+  REQUESTED
+  APPROVED
+  REJECTED
+  EXECUTED
 }
 
 model Document {
@@ -933,20 +1992,52 @@ model Document {
   clientRelationship   ClientRelationship? @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
   engagementId         String?
   engagement           Engagement?         @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+  obligationId         String?
+  obligation           Obligation?         @relation(fields: [obligationId, practiceId], references: [id, practiceId])
 
   title          String
   classification ConfidentialityClass @default(NORMAL)
 
-  retentionUntil DateTime? @db.Date
-  legalHold      Boolean   @default(false)
-  archivedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  // DOC04 record class.
+  kind DocumentKind @default(INTERNAL)
+  // DOC04: "Internal audit working papers are not automatically client
+  // deliverables." Held separately from `kind` because a working paper stays
+  // a working paper even after a redacted extract is released.
+  workingPaper Boolean @default(false)
 
-  versions DocumentVersion[]
+  // DOC03: classify by document type, period, entity and sensitivity. The
+  // entity is `clientRelationshipId`; sensitivity is `classification`.
+  documentType String?
+  periodLabel  String?
+  periodStart  DateTime? @db.Date
+  periodEnd    DateTime? @db.Date
+
+  // DOC06 lock and retention.
+  documentSetId    String?
+  retentionPolicyId String?
+  retentionUntil   DateTime? @db.Date
+  retentionBasis   String?
+  legalHold        Boolean   @default(false)
+  lockedAt         DateTime?
+  lockedByUserId   String?
+
+  // API02: optimistic concurrency on classification / release state.
+  version Int @default(0)
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  versions        DocumentVersion[]
+  setEntries      DocumentSetEntry[]
+  deletionRequests DeletionRequest[]
+  documentSet     DocumentSet?       @relation(fields: [documentSetId, practiceId], references: [id, practiceId])
 
   @@unique([id, practiceId])
   @@index([practiceId, classification])
+  @@index([practiceId, kind])
+  @@index([practiceId, documentType])
+  @@index([practiceId, title])
 }
 
 // DAT02: originals are immutable. A re-upload of the same filename creates
@@ -965,15 +2056,41 @@ model DocumentVersion {
   source          DocumentSource
   scanVerdict     ScanVerdict    @default(PENDING)
 
-  preparedByUserId String?
-  reviewedByUserId String?
-  createdAt        DateTime @default(now())
+  // DOC01 provenance carried onto the stored version.
+  filename         String  @default("")
+  declaredMimeType String?
 
-  releaseGrants DocumentReleaseGrant[]
+  // DOC02 status and custody.
+  status            VersionStatus @default(DRAFT)
+  preparedByUserId  String?
+  reviewedByUserId  String?
+  reviewedAt        DateTime?
+  approvedByUserId  String?
+  approvedByUserName String?
+  approvedAt        DateTime?
+  supersededAt      DateTime?
+
+  // DOC02 / redaction rule: a derivative names the exact version it came from
+  // and how it was produced, so an OCR or redaction pass can never be mistaken
+  // for the original evidence.
+  derivation            DerivationKind @default(ORIGINAL)
+  derivedFromVersionId  String?
+  derivedFromVersion    DocumentVersion?  @relation("Derivation", fields: [derivedFromVersionId, practiceId], references: [id, practiceId])
+  derivatives           DocumentVersion[] @relation("Derivation")
+
+  createdAt DateTime @default(now())
+
+  releaseGrants   DocumentReleaseGrant[]
+  releases        DocumentRelease[]
+  accessTokens    DocumentAccessToken[]
+  classifications DocumentClassification[]
+  setEntries      DocumentSetEntry[]
+  redactionReview RedactionReview?
 
   @@unique([id, practiceId])
   @@unique([documentId, versionNo])
   @@index([practiceId, sha256])
+  @@index([practiceId, status])
 }
 
 model DocumentReleaseGrant {
@@ -991,6 +2108,321 @@ model DocumentReleaseGrant {
   createdAt DateTime  @default(now())
 
   @@index([practiceId, expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// DOC01 — intake
+// ---------------------------------------------------------------------------
+
+// Every upload ATTEMPT gets a row, including the ones that never became a
+// document. A rejected or quarantined file that leaves no record is how a
+// malicious upload becomes invisible, and how the uploader is left with no
+// actionable reason.
+model DocumentIntake {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  // Null while the file is quarantined or rejected — nothing was filed.
+  documentId        String?
+  documentVersionId String?
+
+  clientRelationshipId String?
+  clientRelationship   ClientRelationship? @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+  engagementId         String?
+  engagement           Engagement?         @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+  obligationId         String?
+  checklistItemId      String?
+  clientRequestId      String?
+  periodLabel          String?
+
+  filename         String
+  declaredMimeType String
+  detectedMimeType String?
+  sizeBytes        BigInt
+  sha256           String?
+  source           DocumentSource
+
+  // A portal upload is made by a client CONTACT, not a staff user.
+  uploadedByUserId    String?
+  uploadedByContactId String?
+  receivedAt          DateTime @default(now())
+
+  outcome         IntakeOutcome
+  rejectionReason RejectionReason @default(NONE)
+  rejectionDetail String?
+
+  scanVerdict    ScanVerdict @default(PENDING)
+  scannerName    String?
+  scannerVersion String?
+
+  // Quarantined bytes are held under a separate key prefix, never alongside
+  // clean documents, and are not reachable through any document route.
+  quarantineObjectId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, receivedAt])
+  @@index([practiceId, outcome])
+}
+
+// ---------------------------------------------------------------------------
+// DOC03 — classification metadata
+// ---------------------------------------------------------------------------
+
+// "OCR and AI classifications are draft metadata with source references and
+// correction history." A suggestion is never silently written onto the
+// document — it lands here as DRAFT and a human confirms or corrects it.
+model DocumentClassification {
+  id                String          @id @default(uuid())
+  practiceId        String
+  documentVersionId String
+  documentVersion   DocumentVersion @relation(fields: [documentVersionId, practiceId], references: [id, practiceId])
+
+  field      String
+  value      String
+  confidence Float?
+
+  producedBy      String
+  modelVersion    String?
+  sourceReference String?
+
+  status           ClassificationStatus @default(DRAFT)
+  supersedesId     String?
+  supersedes       DocumentClassification?  @relation("ClassificationCorrection", fields: [supersedesId], references: [id])
+  correctedBy      DocumentClassification[] @relation("ClassificationCorrection")
+  decidedByUserId  String?
+  decidedByUserName String?
+  decidedAt        DateTime?
+  correctionReason String?
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, documentVersionId, field])
+}
+
+// ---------------------------------------------------------------------------
+// DOC04 — release and sharing
+// ---------------------------------------------------------------------------
+
+// A release is pinned to ONE version. Releasing "the document" is how a later,
+// unreviewed version silently reaches a client.
+model DocumentRelease {
+  id                String          @id @default(uuid())
+  practiceId        String
+  documentId        String
+  documentVersionId String
+  documentVersion   DocumentVersion @relation(fields: [documentVersionId, practiceId], references: [id, practiceId])
+
+  releasedByUserId   String
+  releasedByUserName String
+  reason             String?
+
+  expiresAt      DateTime?
+  revokedAt      DateTime?
+  revokedByUserId String?
+  revokeReason   String?
+
+  createdAt DateTime @default(now())
+
+  recipients DocumentReleaseRecipient[]
+  tokens     DocumentAccessToken[]
+
+  @@index([practiceId, documentId])
+}
+
+// "A reviewer releases an exact version to NAMED portal contacts."
+model DocumentReleaseRecipient {
+  id         String          @id @default(uuid())
+  practiceId String
+  releaseId  String
+  release    DocumentRelease @relation(fields: [releaseId], references: [id])
+
+  contactId            String
+  contact              Contact @relation(fields: [contactId], references: [id])
+  clientRelationshipId String
+  // DAT02: the name at the moment of release, so a later rename cannot
+  // rewrite who a report was sent to.
+  contactNameAtRelease String
+
+  @@unique([releaseId, contactId])
+  @@index([practiceId, contactId])
+}
+
+// The link handed out is a token for THIS row, not a presigned object-store
+// URL. A presigned URL is valid until it expires no matter what happens to the
+// holder's access, which is exactly what DOC04's "revoke on permission change"
+// forbids. Redemption re-authorises against live state every time.
+model DocumentAccessToken {
+  id                String          @id @default(uuid())
+  practiceId        String
+  documentVersionId String
+  documentVersion   DocumentVersion @relation(fields: [documentVersionId, practiceId], references: [id, practiceId])
+  releaseId         String?
+  release           DocumentRelease? @relation(fields: [releaseId], references: [id])
+
+  tokenHash String @unique
+
+  issuedToUserId    String?
+  issuedToContactId String?
+  issuedByUserId    String?
+  purpose           String
+
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  revokeReason String?
+  maxUses     Int?
+  usedCount   Int       @default(0)
+  lastUsedAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, expiresAt])
+  @@index([issuedToUserId])
+}
+
+// The section's closing rule: "Redaction produces a derivative with a review
+// record; visual black rectangles alone do not prove sensitive content has
+// been removed." The reviewer must record that the hidden layers were checked.
+model RedactionReview {
+  id                String          @id @default(uuid())
+  practiceId        String
+  documentVersionId String
+  documentVersion   DocumentVersion @relation(fields: [documentVersionId, practiceId], references: [id, practiceId])
+
+  sourceVersionId String
+  method          String
+
+  checkedHiddenText  Boolean @default(false)
+  checkedMetadata    Boolean @default(false)
+  checkedAttachments Boolean @default(false)
+  checkedOcrLayer    Boolean @default(false)
+
+  reviewedByUserId   String
+  reviewedByUserName String
+  conclusion         String
+  reviewedAt         DateTime @default(now())
+
+  @@unique([documentVersionId, practiceId])
+  @@index([practiceId])
+}
+
+// ---------------------------------------------------------------------------
+// DOC06 — lock, retention and deletion
+// ---------------------------------------------------------------------------
+
+model DocumentSet {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  engagementId         String?
+  clientRelationshipId String?
+  name                 String
+  state                DocumentSetState @default(OPEN)
+
+  // The manifest is the evidence: version ids, numbers and hashes at the
+  // moment of finalisation, plus a hash OF the manifest so the list itself is
+  // tamper-evident.
+  manifest         Json?
+  manifestSha256   String?
+  finalisedAt      DateTime?
+  finalisedByUserId String?
+  finalisedByUserName String?
+
+  createdAt DateTime @default(now())
+
+  entries   DocumentSetEntry[]
+  documents Document[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, state])
+}
+
+model DocumentSetEntry {
+  id            String      @id @default(uuid())
+  practiceId    String
+  documentSetId String
+  documentSet   DocumentSet @relation(fields: [documentSetId, practiceId], references: [id, practiceId])
+
+  documentId        String
+  document          Document        @relation(fields: [documentId, practiceId], references: [id, practiceId])
+  documentVersionId String
+  documentVersion   DocumentVersion @relation(fields: [documentVersionId, practiceId], references: [id, practiceId])
+
+  versionNo Int
+  sha256    String
+  addedAt   DateTime @default(now())
+
+  @@unique([documentSetId, documentVersionId])
+  @@index([practiceId])
+}
+
+model RetentionPolicy {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  recordClass   String
+  retainYears   Int
+  basis         String
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+
+  @@unique([practiceId, recordClass, effectiveFrom])
+}
+
+model LegalHold {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  reason             String
+  scopeDocumentId    String?
+  scopeEngagementId  String?
+  scopeClientRelationshipId String?
+
+  placedByUserId   String
+  placedByUserName String
+  placedAt         DateTime  @default(now())
+  releasedAt       DateTime?
+  releasedByUserId String?
+  releaseReason    String?
+
+  @@index([practiceId, releasedAt])
+}
+
+// DOC06: "Deletion requires eligibility check, approval and logged action."
+// Three separate gates, each recorded — a delete button that checks all three
+// inline leaves nothing to inspect afterwards.
+model DeletionRequest {
+  id         String   @id @default(uuid())
+  practiceId String
+  documentId String
+  document   Document @relation(fields: [documentId, practiceId], references: [id, practiceId])
+
+  requestedByUserId String
+  requestedAt       DateTime @default(now())
+  reason            String
+
+  eligibilityCheckedAt DateTime?
+  eligible             Boolean?
+  ineligibleReason     String?
+
+  state              DeletionState @default(REQUESTED)
+  approvedByUserId   String?
+  approvedByUserName String?
+  approvedAt         DateTime?
+  rejectedReason     String?
+  executedAt         DateTime?
+
+  // Retained backups follow their own documented expiry — deleting the live
+  // record does not reach into them, and saying so is part of the record.
+  backupExpiryNote String?
+
+  @@index([practiceId, state])
 }
 
 // ---------------------------------------------------------------------------
@@ -1210,9 +2642,545 @@ model Event {
   errorMessage String?
   reason       String?
 
+  // SEC04: exact version of the record the action applied to.
+  targetVersion Int?
+
   createdAt DateTime @default(now())
+
+  // SEC04 tamper evidence. `sequence`, `previousHash` and `hash` are written
+  // by a database trigger, never by the application — so an attacker with
+  // application-level access cannot rewrite history and recompute the chain.
+  // Any gap or mismatch when the chain is walked proves interference.
+  sequence     BigInt  @default(autoincrement())
+  previousHash String?
+  hash         String?
 
   @@index([practiceId, createdAt])
   @@index([targetType, targetId])
   @@index([correlationId])
+  @@index([sequence])
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum AlertKind {
+  FAILED_LOGIN_BURST
+  ABNORMAL_EXPORT
+  PRIVILEGE_CHANGE
+  REPEATED_CROSS_SCOPE_ACCESS
+  QUEUE_FAILURE
+  STORAGE_CAPACITY
+  BACKUP_FAILURE
+  SECRET_REVEAL
+}
+
+/// SEC05 — monitoring and incidents.
+///
+/// An alert names an owner and a destination, and carries only the metadata
+/// needed to investigate. It deliberately does NOT carry document contents or
+/// secret values: "Detection should preserve evidence without sending
+/// confidential files to an unrestricted alert channel."
+model SecurityAlert {
+  id         String   @id @default(uuid())
+  practiceId String?
+
+  kind     AlertKind
+  severity AlertSeverity
+
+  subjectUserId String?
+  summary       String
+  // Counts, ids and timestamps only — never file bodies or secret values.
+  evidence      Json
+
+  incidentOwner    String
+  alertDestination String
+
+  acknowledgedAt     DateTime?
+  acknowledgedByName String?
+  resolvedAt         DateTime?
+  resolutionNote     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([kind, createdAt])
+  @@index([practiceId, resolvedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Communication and client requests — COM01-04 (PRD §16)
+// COM05 (meetings) is R1; COM06 (WhatsApp / other channels) is R2.
+// ---------------------------------------------------------------------------
+
+/// COM01: "Distinguish internal discussion from client visible conversation."
+/// Two values only, deliberately. A third "maybe" state is how internal notes
+/// leak — either the client can read it or they cannot.
+enum ThreadVisibility {
+  INTERNAL
+  CLIENT_VISIBLE
+}
+
+enum MessageDirection {
+  INTERNAL_NOTE
+  OUTBOUND_TO_CLIENT
+  INBOUND_FROM_CLIENT
+}
+
+/// The medium a message arrived or left by. EMAIL_REFERENCE is a pointer to
+/// correspondence that happened in a mail client — the thread records that it
+/// exists and where; it does not claim to be the mail system.
+enum MessageChannel {
+  PORTAL
+  EMAIL_REFERENCE
+  NOTE
+  MEETING_SUMMARY
+}
+
+/// COM01 — the unified context. A thread hangs off the client relationship and
+/// optionally narrows to an engagement or job, so "everything said about this
+/// client" and "everything said about this audit" are the same records read at
+/// two widths rather than two parallel inboxes that drift apart.
+model MessageThread {
+  id                   String             @id @default(uuid())
+  practiceId           String
+  clientRelationshipId String
+  clientRelationship   ClientRelationship @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+
+  engagementId String?
+  engagement   Engagement? @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+  jobId        String?
+  job          Job?        @relation(fields: [jobId, practiceId], references: [id, practiceId])
+
+  subject    String
+  visibility ThreadVisibility @default(INTERNAL)
+
+  /// API02 optimistic concurrency — a visibility change is exactly the kind of
+  /// consequential edit that must not silently last-write-win.
+  version Int @default(1)
+
+  createdByUserId String
+  closedAt        DateTime?
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  messages          Message[]
+  visibilityChanges ThreadVisibilityChange[]
+  outboundMessages  OutboundMessage[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, clientRelationshipId, updatedAt])
+  @@index([practiceId, engagementId])
+}
+
+model Message {
+  id         String        @id @default(uuid())
+  practiceId String
+  threadId   String
+  thread     MessageThread @relation(fields: [threadId, practiceId], references: [id, practiceId])
+
+  direction MessageDirection
+  channel   MessageChannel
+
+  /// Per-message visibility. A thread being made client-visible does NOT
+  /// silently expose every message it contains: each message carries its own
+  /// classification, and COM01's preview is what reconciles the two.
+  visibility ThreadVisibility
+
+  body String
+
+  authorUserId    String?
+  authorContactId String?
+  /// DAT02: the author's name at the time, so a later rename or deactivation
+  /// does not rewrite who said what.
+  authorName String
+
+  /// COM01: an email reference points at correspondence held elsewhere. The
+  /// message records the reference, never a scraped copy of the mailbox.
+  externalReference String?
+
+  /// Document versions attached to this message, as version ids. Exact
+  /// versions, never "the latest" — DOC04's rule applied to conversation.
+  attachedVersionIds String[] @default([])
+
+  redactedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([practiceId, threadId, createdAt])
+}
+
+/// COM01: "A user must not change a thread's visibility without previewing all
+/// included content."
+///
+/// The preview is a RECORD, not a UI step. It captures a digest of exactly what
+/// was shown; committing the change requires that digest, and the digest is
+/// recomputed from live content at commit time. If a message was added or
+/// changed after the preview, the digest no longer matches and the change is
+/// refused — so a preview cannot wave through content nobody saw.
+model ThreadVisibilityChange {
+  id         String        @id @default(uuid())
+  practiceId String
+  threadId   String
+  thread     MessageThread @relation(fields: [threadId, practiceId], references: [id, practiceId])
+
+  fromVisibility ThreadVisibility
+  toVisibility   ThreadVisibility
+
+  /// SHA-256 over the canonical list of message ids + their visibility + a
+  /// hash of each body, in a fixed order.
+  contentDigest     String
+  previewedCount    Int
+  previewedByUserId String
+  previewedAt       DateTime @default(now())
+
+  committedAt       DateTime?
+  committedByUserId String?
+  abandonedAt       DateTime?
+  refusalReason     String?
+
+  @@index([practiceId, threadId, previewedAt])
+}
+
+// ------------------------------------------------------------------ COM02
+
+/// COM02: "A received file stops that item's reminder only after the
+/// configured received / accepted rule."
+enum RequestCloseRule {
+  ON_RECEIPT
+  ON_ACCEPTANCE
+}
+
+/// The response state of ONE requested item. A client may submit, explain
+/// nonavailability, or ask a question — all three are legitimate responses and
+/// only one of them is a document.
+enum RequestItemState {
+  OUTSTANDING
+  SUBMITTED
+  NOT_AVAILABLE
+  QUESTION_RAISED
+  ACCEPTED
+  REJECTED
+  WAIVED
+}
+
+/// COM02 — the itemisation. "one upload cannot close all requests" is enforced
+/// structurally: reminders are suppressed per ITEM, and a response names the
+/// single item it answers.
+model ClientRequestItem {
+  id         String        @id @default(uuid())
+  practiceId String
+  requestId  String
+  request    ClientRequest @relation(fields: [requestId, practiceId], references: [id, practiceId])
+
+  sequence     Int
+  documentType String
+  description  String?
+  /// The period the item covers, as the client would name it ("FY 2025-26 Q1").
+  periodLabel  String?
+  periodStart  DateTime? @db.Date
+  periodEnd    DateTime? @db.Date
+
+  dueDate     DateTime? @db.Date
+  ownerUserId String?
+
+  state          RequestItemState @default(OUTSTANDING)
+  stateChangedAt DateTime?
+
+  /// Set when the item stops generating reminders, which is NOT the same
+  /// instant as receiving a file unless the close rule says so.
+  remindersStoppedAt DateTime?
+
+  /// API02 optimistic concurrency.
+  version Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  responses ClientRequestItemResponse[]
+
+  @@unique([id, practiceId])
+  @@unique([requestId, sequence])
+  @@index([practiceId, state, dueDate])
+}
+
+enum RequestResponseKind {
+  DOCUMENT
+  NOT_AVAILABLE_EXPLANATION
+  QUESTION
+  STAFF_NOTE
+}
+
+/// One response answers ONE item. Nothing here can fan out across items, which
+/// is what makes "a client corrects an item and only that request clears" true
+/// by construction rather than by care.
+model ClientRequestItemResponse {
+  id         String            @id @default(uuid())
+  practiceId String
+  itemId     String
+  item       ClientRequestItem @relation(fields: [itemId, practiceId], references: [id, practiceId])
+
+  kind RequestResponseKind
+
+  documentVersionId String?
+  explanation       String?
+
+  respondedByContactId String?
+  respondedByUserId    String?
+  respondedByName      String
+
+  /// The staff decision on this response, under the ON_ACCEPTANCE rule.
+  acceptedAt       DateTime?
+  acceptedByUserId String?
+  rejectedAt       DateTime?
+  rejectionReason  String?
+
+  supersededAt DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([practiceId, itemId, createdAt])
+}
+
+// ------------------------------------------------------------------ COM03
+
+/// COM03: "Templates contain no client data until rendered within the
+/// authorised scope." A template is stored with placeholders only; the render
+/// happens at send time, inside a scope check, and the rendered body lives on
+/// the OutboundMessage, never back on the template.
+model MessageTemplate {
+  id         String  @id @default(uuid())
+  practiceId String?
+  tenantId   String
+  tenant     Tenant  @relation(fields: [tenantId], references: [id])
+
+  code    String
+  name    String
+  subject String
+  /// Placeholders are {{dotted.paths}}. Stored text is checked to hold no
+  /// literal identifier-shaped values before it can be activated.
+  body    String
+
+  /// Service communication only. Marketing needs a separately reviewed policy
+  /// (PRD §16 closing note), so it is not a value this field offers.
+  purpose String @default("SERVICE")
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, code])
+}
+
+/// COM04 delivery states, logged separately as the PRD requires. Deliberately
+/// a NEW enum rather than a retype of DeliveryState (used by ObligationAlert):
+/// the two lifecycles differ, and retyping a live column is the destructive
+/// migration this project has been bitten by before.
+///
+/// SUBMITTED means the provider accepted the message. It is NOT DELIVERED, and
+/// neither state is proof of reading or filing.
+enum OutboundState {
+  QUEUED
+  HELD_QUIET_HOURS
+  SUBMITTED
+  DELIVERED
+  FAILED
+  SUPPRESSED
+  DELIVERY_UNCERTAIN
+}
+
+enum OutboundKind {
+  CLIENT_MESSAGE
+  DOCUMENT_REQUEST_REMINDER
+  DEADLINE_REMINDER
+  INVOICE
+  DOCUMENT_RELEASE
+  DIGEST
+}
+
+/// COM03/COM04 — the send record.
+///
+/// Everything shown in the confirmation screen is snapshotted here and hashed;
+/// the send is refused unless the hash the user confirmed still matches what
+/// would actually go out. That closes the gap between "what I reviewed" and
+/// "what was sent" that a re-render between preview and send would otherwise
+/// open.
+model OutboundMessage {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  threadId String?
+  thread   MessageThread? @relation(fields: [threadId, practiceId], references: [id, practiceId])
+
+  clientRelationshipId String?
+  kind                 OutboundKind
+
+  /// COM03 sender identity, snapshotted. `sendingPracticeName` is the practice
+  /// the recipient will see; binding it to practiceId at send time is what
+  /// stops a Company invoice leaving under an Associates identity.
+  sendingPracticeName String
+  fromIdentity        String
+  replyToIdentity     String
+  letterheadId        String?
+
+  templateId      String?
+  renderedSubject String
+  renderedBody    String
+
+  /// Exact document versions attached, and the portal links offered instead.
+  attachedVersionIds String[] @default([])
+  portalLinkTokenIds String[] @default([])
+
+  /// SHA-256 over the canonical preview: practice, from, reply-to, sorted
+  /// recipient addresses, subject, body, sorted attachment version ids.
+  previewHash              String
+  previewConfirmedAt       DateTime?
+  previewConfirmedByUserId String?
+
+  /// COM04 duplicate key: one logical message per event per recipient set.
+  /// Unique, so two workers racing the same reminder cannot both insert.
+  dedupKey String @unique
+
+  state        OutboundState @default(QUEUED)
+  stateDetail  String?
+  scheduledFor DateTime?
+  submittedAt  DateTime?
+  deliveredAt  DateTime?
+
+  attemptCount Int @default(0)
+  maxAttempts  Int @default(3)
+
+  requestedByUserId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  recipients OutboundRecipient[]
+  attempts   DeliveryAttempt[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, state, scheduledFor])
+  @@index([practiceId, kind, createdAt])
+}
+
+/// A recipient as it stood at send time. Held separately from Contact so a
+/// later change to the contact record cannot rewrite who a message went to.
+model OutboundRecipient {
+  id         String          @id @default(uuid())
+  practiceId String
+  messageId  String
+  message    OutboundMessage @relation(fields: [messageId, practiceId], references: [id, practiceId])
+
+  contactId String?
+  address   String
+  name      String
+  role      String  @default("TO")
+
+  /// COM03: the authority that justified sending to this address, resolved
+  /// live at send time, recorded here as evidence.
+  authorityBasis String
+
+  /// True when the address differs from the contact's verified channel and had
+  /// to clear a separate verification. Recorded so a reader can tell the
+  /// difference between "the usual address" and "a new one someone supplied".
+  wasChangedRecipient Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, messageId])
+}
+
+/// COM03: "Verify changed external recipients separately."
+///
+/// A verification is a separate act with its own actor and evidence — it is not
+/// satisfied by the person who introduced the new address typing it twice.
+model RecipientVerification {
+  id         String @id @default(uuid())
+  practiceId String
+
+  contactId String?
+  address   String
+
+  previousAddress  String?
+  proposedByUserId String?
+  proposedByName   String
+
+  verifiedAt           DateTime?
+  verifiedByUserId     String?
+  verifiedByName       String?
+  verificationMethod   String?
+  verificationEvidence String?
+
+  refusedAt     DateTime?
+  refusalReason String?
+
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, address, verifiedAt])
+}
+
+// ------------------------------------------------------------------ COM04
+
+/// Each transmission attempt, kept separately from the message so the retry
+/// history survives whatever the final state is.
+model DeliveryAttempt {
+  id         String          @id @default(uuid())
+  practiceId String
+  messageId  String
+  message    OutboundMessage @relation(fields: [messageId, practiceId], references: [id, practiceId])
+
+  attemptNo Int
+  state     OutboundState
+  /// The provider's own response. Provider acceptance is logged as evidence of
+  /// ACCEPTANCE, never promoted to delivery.
+  providerReference String?
+  detail            String?
+
+  /// A bounce is a fact about the channel, not an acknowledgement by a person.
+  /// DUE03's rule restated: it can never count as receipt.
+  isBounce   Boolean @default(false)
+  bounceKind String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, attemptNo])
+  @@index([practiceId, createdAt])
+}
+
+enum DigestMode {
+  IMMEDIATE
+  DAILY_DIGEST
+  WEEKLY_DIGEST
+}
+
+/// COM04 quiet hours and digest options, per recipient. Held per practice so a
+/// contact who deals with both firms is not silenced in one by a preference set
+/// in the other.
+model NotificationPreference {
+  id         String  @id @default(uuid())
+  practiceId String
+  contactId  String?
+  userId     String?
+
+  digestMode DigestMode @default(IMMEDIATE)
+
+  /// Local-time minutes from midnight. Quiet hours may wrap past midnight
+  /// (e.g. 1290 -> 480), which the engine handles explicitly.
+  quietFromMinute Int?
+  quietToMinute   Int?
+  timeZone        String @default("Asia/Kolkata")
+
+  /// Statutory deadline alerts can be marked exempt from quiet hours by an
+  /// explicit decision — but that is a decision, not the default.
+  quietHoursOverrideKinds OutboundKind[] @default([])
+
+  suppressedUntil DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([practiceId, contactId])
+  @@unique([practiceId, userId])
 }

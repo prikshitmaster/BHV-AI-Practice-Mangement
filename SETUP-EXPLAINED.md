@@ -109,47 +109,251 @@ database, then answers:
 **Why it matters:** it is the single fastest way to know if the system is
 healthy, and it is exactly what T01's acceptance test checks.
 
-### Step 5 — Run the test (T01.5) ⏳ BLOCKED
+### Step 5 — Run the test (T01.5) ✅
 
-Not done yet. See below.
+Docker wouldn't start: Windows had the **WSL** service (`LxssManager`)
+set to **Disabled**, and Docker on Windows runs containers inside WSL.
+I enabled the service, you ran `wsl --update --web-download` to fetch the
+missing WSL2 kernel, and Docker came up. Then all four containers
+started, the migration applied, and `/api/health` returned **200
+`{"status":"ok","db":"up"}`**. T01 passed.
+
+---
+
+## What was built after the scaffold
+
+### T02 — The real data model ✅
+
+Created all the tables the firm actually needs: practices, staff,
+clients, engagements, jobs, documents, invoices, approvals, and an audit
+log.
+
+**The important idea here:** the database itself refuses to mix the two
+practices. Every record carries the practice it belongs to, and links
+between records check the practice matches. So a Company invoice
+*physically cannot* point at an Associates engagement — Postgres rejects
+it. It's not a rule the code politely follows; it's a wall.
+
+Also: money is stored as exact decimals (never floating point, which
+loses pennies), and an issued invoice keeps a frozen copy of its details.
+Rename a client contact next year and last year's invoice is untouched.
+
+**Tested:** 13 checks, all passing.
+
+### T03 — Keeping the two practices apart ✅
+
+The PRD demands that someone who works only at Associates cannot reach
+Company records through **six different routes**: typing the URL, calling
+the API, searching, exporting a spreadsheet, sending an email, or opening
+a document link.
+
+I built a single gatekeeper that every one of those routes must pass
+through, and it says "no" unless proven otherwise. It returns "not found"
+rather than "forbidden" — because "forbidden" would itself confirm the
+record exists.
+
+There's also a proper sharing mechanism: one practice can share a
+specific document with the other, but the grant must name a reason and an
+expiry, a *new version* of that document is not automatically shared, and
+revoking cuts access immediately.
+
+**Tested:** 23 checks, all passing — including all six routes.
+
+### T04 — Who is allowed to do what ✅
+
+Ten roles (Partner, Manager, Reviewer, Article, Finance, IT Admin, and so
+on). Two deliberate design points:
+
+- **The IT administrator cannot approve filings or see client records.**
+  They keep the system running; they have no professional authority.
+  Equally, a partner cannot administer the system. Mixing those two is
+  how an IT account ends up able to sign off accounts.
+- **You cannot approve your own work.** An article can prepare a filing
+  but not approve it. For invoices there's a value threshold. If someone
+  genuinely is the only reviewer available, they must record a written
+  exception — which is logged and leaves a quality-review obligation
+  behind. For statutory filings, no exception is possible at all.
+
+When someone leaves, suspending them kills their live sessions *and*
+cancels their queued exports in one operation — and any background job
+double-checks permission again at the moment it runs, not just when it
+was queued.
+
+**Tested:** 37 checks, all passing.
+
+### T05 — Logging in ✅
+
+Email + password + an authenticator app code. A correct password alone
+never logs you in.
+
+- Passwords are stored as scrypt hashes — the real password is never
+  saved anywhere.
+- The authenticator seed is encrypted with a key kept *outside* the
+  database, so a stolen database backup yields no working codes.
+- Sessions expire after 30 minutes idle or 12 hours absolute, enforced by
+  the server on every request, and can be revoked instantly.
+- Exports, role changes and revealing secrets require re-entering your
+  code (a "step-up").
+- **"admin/admin" is impossible** — banned passwords are rejected at the
+  moment someone tries to set one.
+
+**The headline test:** MFA recovery *with the owner away*. It needs a
+second authorised person to approve, the person recovering cannot approve
+their own request, and recovery never switches MFA off — it forces you to
+set it up again.
+
+**And a real proof, not a promise:** the test takes an actual database
+dump and searches it for the exact password, authenticator seed, session
+token and recovery codes used in that test run. None appear.
+
+**Tested:** 54 checks, all passing.
+
+### T06 — Security baseline ✅ (mostly)
+
+The audit log is now **physically impossible to edit or delete** — Postgres
+itself rejects the attempt, even from the database owner. Each entry is also
+chained to the one before it with a fingerprint, so if anyone did tamper
+with the database directly, the chain breaks and we can prove it.
+
+Also added: security headers on every page, CSRF protection, and monitoring
+that raises an alert on repeated failed logins, unusually large exports, or —
+most importantly — anyone repeatedly probing the other practice's data.
+
+Alerts deliberately carry **counts and IDs only, never document contents**,
+so sending an alert to a chat channel can't itself become a data leak.
+
+**Tested:** 44 checks passing.
+
+**Not finished, and I can't finish it:** the PRD requires an **independent
+penetration test** before production. That needs an outside expert. It's
+logged as an open blocker and T06 is deliberately left unticked.
+
+### T07 — Client registry ✅
+
+Onboarding clients: one company can hold several GST registrations without
+being duplicated, and the same company can be a client of *both* practices
+with completely separate records.
+
+Two details worth knowing:
+
+- **Duplicate detection that doesn't leak.** If you try to add a client whose
+  PAN already exists in the *other* practice, you're warned — but you're not
+  told the name, or even which practice. Enough to stop you creating a
+  duplicate, not enough to learn who the other practice acts for.
+- **Changing a client's email is not a simple edit.** It's a request that
+  needs staff authorisation, because that address receives statutory
+  correspondence and password resets. Rejected attempts are kept, with
+  evidence — because an attempt to redirect a client's mail is itself
+  something you want a record of.
+
+**Tested:** 55 checks passing.
+
+### T08 — Engagements ✅
+
+Service templates, engagement letters, and change control.
+
+The important behaviour: **an accepted engagement is never edited.** If a
+client on a GST retainer asks you to also handle litigation, that creates a
+*revision*. The original keeps exactly the terms the client accepted, a fee
+review and an authority review are raised automatically, and — critically —
+the months of GST work already done are **not** duplicated onto the revision.
+
+Also: you can't approve your own engagement letter, typed consent isn't
+accepted for a statutory audit (a name typed in a box is not a signature),
+and an independence concern blocks the job from starting until a *qualified
+reviewer who isn't the job owner* signs it off.
+
+**Tested:** 55 checks passing.
+
+### T09 — Work, jobs and queues ✅
+
+Recurring work (monthly GST returns and the like), the states a job moves
+through, and the staff queues: My work, Team work, Review queue, Waiting
+for client, Overdue.
+
+Three behaviours worth knowing:
+
+- **Running the monthly generator twice doesn't duplicate anything** — and
+  neither does editing the service template. That second part is the subtle
+  one: if the template version were part of how we detect duplicates, a
+  small edit would silently regenerate every open job.
+- **Asking for changes after review cancels the earlier approval.** Not by
+  deleting it — the old approval stays as history — but because it no
+  longer matches the current version of the work.
+- **Reopening a completed job keeps everything.** The filing reference, the
+  completion date and the full history all survive; reopening only adds to
+  the record.
+
+Also: a client being slow pauses *our* internal clock, but never moves the
+legal deadline, and chasing continues regardless.
+
+**Tested:** 60 checks passing.
+
+### T10 — Statutory calendar ✅
+
+Deadlines, extensions and reminders.
+
+- **Five separate dates** per obligation — the legal date, our internal
+  target, the review target, the client document cutoff and the payment
+  date. Collapsing these into one "due date" is how an internal target
+  quietly becomes the date everyone believes is the law.
+- **Extensions preview before they apply.** A notification covering only
+  audit cases moves only audit cases — not the non-audit ones, not
+  already-filed returns, not returns under the other Act. Both the original
+  and the new date stay visible, with the notification that authorised it.
+- **"We don't know" is not "doesn't apply."** An obligation whose category
+  or form can't be determined sits visibly in *Review required*. It can't
+  be dismissed without someone stating a determination.
+- **A bounced reminder is never proof the client was told.** It can't even
+  be marked as acknowledged.
+- **Both income tax regimes coexist** — the 1961 Act and the 2025 Act — with
+  the law, assessment year and tax year stored separately, so the filing
+  date alone never decides which Act applies.
+
+**Tested:** 56 checks passing.
 
 ---
 
 ## Where things stand right now
 
-✅ **The website runs.** Open **http://localhost:3000** — it works today.
-It shows the default starter page, because T01 is scaffold-only. Real
-screens start at T07.
+✅ **397 automated checks passing across everything built so far.**
 
-⏳ **The database is not running yet**, so `/api/health` cannot return
-200 yet.
+**10 of 18 tasks done** (T01–T10; T06 is complete except for the outside
+penetration test). Next up is T11 — document management.
 
-🔒 **The blocker is on your side.** Docker cannot start on this machine
-because a Windows service called **WSL** (`LxssManager`) is switched to
-**Disabled**. Docker on Windows runs its containers inside WSL, so with
-WSL off, Postgres/Redis/MinIO cannot start. I cannot change this myself
-because it needs Administrator rights.
+### A real bug the tests caught, worth mentioning
 
-### What you need to do
+While re-running the whole suite after T10, a test failed that had passed
+minutes earlier. The cause was genuine: a deadline extension issued for one
+firm was matching **another firm's** identical deadlines, because tax rules
+are shared across firms while the deadlines are not. Left alone, one client's
+extension notice could have moved a different client's legal deadline.
 
-Open **PowerShell as Administrator** (right-click → Run as
-administrator) and paste:
+It's fixed, and there's now a permanent test that creates a second firm with
+an identical deadline and proves it isn't touched.
 
-```powershell
-Set-Service -Name LxssManager -StartupType Automatic
-Start-Service LxssManager
-wsl --install --no-distribution
-```
+This is the argument for re-running everything after each task rather than
+just the newest test — the first run passed.
 
-Then restart Docker Desktop. If it asks you to reboot, reboot.
+**What you can see today:** http://localhost:3000 and
+`/api/health`. There are still no client-facing screens — those start at
+**T07 (client registry)**. Everything so far is the foundation: the
+database, the isolation walls, permissions, and login. That ordering is
+deliberate; retrofitting practice isolation onto finished screens is how
+these projects leak data.
 
-### What I will do after that
+### One decision that needs your review
 
-1. `docker compose up -d` → starts Postgres, Redis, MinIO
-2. `prisma migrate dev` → creates the real tables in the database
-3. Open `/api/health` → confirm it returns **200 `db:"up"`**
-4. Tick T01 in `TASKS.md`, log it in `PROGRESS.md`
-5. Start **T02 — the real data model** (clients, invoices, practices)
+`SPEC.md` chose **Auth.js** for authentication. I did not use it, and you
+should know why: the PRD requires sessions to be revocable *immediately*
+(when someone is walked out of the building). Auth.js's default token
+sessions stay valid until they expire, no matter what — you can't call
+them back. So sessions are stored in the database instead, which makes
+instant revocation real.
+
+Auth.js can still be added later for the login screen itself. But this is
+a genuine departure from the written plan, so it's flagged in
+`PROGRESS.md` for you to accept or overrule.
 
 ---
 

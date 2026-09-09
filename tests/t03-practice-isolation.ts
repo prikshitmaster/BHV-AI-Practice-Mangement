@@ -223,7 +223,7 @@ async function main() {
     data: {
       practiceId: associates.id,
       userId: associatesUser.id,
-      role: "SENIOR",
+      role: "REVIEWER",
       effectiveFrom: new Date("2024-04-01"),
     },
   });

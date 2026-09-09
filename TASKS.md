@@ -91,98 +91,322 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
 
 ## Phase 1 — Identity & security
 
-- [~] **T04 — Roles & permissions.** Implement IAM01-06 (PRD §8): deny-
+- [x] **T04 — Roles & permissions.** Implement IAM01-06 (PRD §8): deny-
   by-default server-side checks, role definitions, assignment scope,
   separation of duties, lifecycle (invite/suspend/revoke).
   *Test: a manager assigned to both firms sees only authorised teams; an
   article cannot approve their own filing; revocation invalidates active
   sessions and queued exports.*
-  - [ ] T04.1 — Schema: IAM02 role set (Group Owner, Practice Partner,
+  - [x] T04.1 — Schema: IAM02 role set (Group Owner, Practice Partner,
     Manager, Reviewer, Staff/Article, Finance, HR, IT Admin, Quality
     Reviewer, Client Contact) via a mapped enum migration; IAM03
     `assignmentScope` + `PermissionGrant` for restricted areas (HR,
     credentials, fee rates, protected workpapers); IAM04
     `SelfReviewException`; IAM05 `Session` + `QueuedJob` so revocation
     has something to invalidate.
-  - [ ] T04.2 — `src/lib/permissions.ts`: deny-by-default action matrix
+  - [x] T04.2 — `src/lib/permissions.ts`: deny-by-default action matrix
     keyed on role + assignment scope + record sensitivity. IT control
     is separated from professional data authority (IAM02).
-  - [ ] T04.3 — IAM04 separation of duties: the author of a filing or
+  - [x] T04.3 — IAM04 separation of duties: the author of a filing or
     invoice cannot approve it; sole-reviewer situations require a
     disclosed self-review exception with reason + quality-review
     follow-up.
-  - [ ] T04.4 — IAM05 lifecycle: invite → accept → suspend/revoke.
+  - [x] T04.4 — IAM05 lifecycle: invite → accept → suspend/revoke.
     Revocation invalidates active sessions AND cancels queued exports
     before further disclosure.
-  - [ ] T04.5 — IAM01: background workers re-check membership at
+  - [x] T04.5 — IAM01: background workers re-check membership at
     execution time, not just at enqueue time.
-  - [ ] T04.6 — Acceptance test script covering all four evidence
+  - [x] T04.6 — Acceptance test script covering all four evidence
     points.
-  - [ ] T04.7 — Run the acceptance test, all assertions pass.
+  - [x] T04.7 — Run the acceptance test, all assertions pass.
 
-- [ ] **T05 — Authentication.** Implement AUTH01-05 (PRD §10): MFA login,
+- [x] **T05 — Authentication.** Implement AUTH01-05 (PRD §10): MFA login,
   session/recovery rules (30 min idle / 12 hr max), invitation bootstrap,
   DSC custody register (metadata only, no private keys).
   *Test: reset/MFA recovery works with the owner absent via a documented
   substitute process; no plaintext secrets in logs or backups.*
+  AUTH04 (portal secret vault) is R1; AUTH06 (SSO) is R2 — both deferred.
+  - [x] T05.1 — Schema: `UserCredential`, `MfaEnrolment` (secret stored
+    encrypted, never plaintext), `MfaRecoveryCode` (hashed),
+    `Invitation` (single-use, hashed token, 48 h default),
+    `RecoveryRequest` (AUTH02 substitute-approver flow),
+    `DscCustodyRecord` (AUTH05 metadata ONLY), `RateLimitCounter`.
+    Extend `Session` with a hashed token + step-up fields.
+  - [x] T05.2 — `src/lib/crypto.ts`: scrypt password hashing, AES-256-GCM
+    secret encryption keyed from env, RFC 6238 TOTP with replay
+    prevention, single-use token generation/hashing.
+  - [x] T05.3 — `src/lib/auth.ts`: login → MFA challenge → session.
+    Server-enforced 30 min idle / 12 hr absolute expiry, immediate
+    revocation, rate limiting on login and invitations.
+  - [x] T05.4 — AUTH02 step-up authentication for exports, role changes
+    and secret reveal.
+  - [x] T05.5 — AUTH03 invitation bootstrap: single-use expiring setup,
+    and joining a known email domain must NOT enrol a user in both
+    practices.
+  - [x] T05.6 — AUTH05 DSC custody register + AUTH01 guard that a
+    default/demo admin account can never be deployed to production.
+  - [x] T05.7 — Acceptance test: MFA recovery with the owner absent via
+    a documented substitute approver; recovery cannot silently remove
+    MFA; no plaintext secrets anywhere in the DB or logs; no
+    "admin/admin".
+  - [x] T05.8 — Run the acceptance test + full regression suite.
 
-- [ ] **T06 — Security baseline.** Implement SEC01-06 (PRD §35): OWASP
+- [~] **T06 — Security baseline.** Implement SEC01-06 (PRD §35): OWASP
   ASVS-aligned hardening, encryption at rest/in transit, audit trail
   (append-only), monitoring hooks, no public debug endpoints.
   *Test: audit trail captures actor/practice/action/version/time/reason
   for every sensitive change; independent pen-test finds no critical/high
   unresolved.*
+  NOTE: the second half of that test — an INDEPENDENT penetration test —
+  cannot be performed from inside this project. It needs an external
+  reviewer and is tracked as an open blocker in PROGRESS.md. T06 is only
+  closed for the parts that can be evidenced here.
+  - [x] T06.1 — SEC04 append-only audit trail enforced by the DATABASE:
+    triggers reject UPDATE and DELETE on `Event`, plus a tamper-evident
+    hash chain computed in-trigger so the application cannot forge it.
+  - [x] T06.2 — SEC04 completeness: one audit helper capturing actor,
+    practice, action, record id, exact version, time, result and reason;
+    assert no passwords or document bodies are ever written to it.
+  - [x] T06.3 — SEC03 hardening: security headers (CSP, HSTS,
+    X-Content-Type-Options, frame denial, referrer policy), CSRF
+    double-submit protection, and no debug endpoints in production.
+  - [x] T06.4 — SEC05 monitoring: `SecurityAlert` records for failed
+    logins, abnormal exports, privilege changes and repeated
+    cross-scope attempts, with an incident owner and alert destination —
+    and without copying confidential file contents into the alert.
+  - [x] T06.5 — SEC01/SEC02/SEC06 documented control mapping in
+    `SECURITY.md`: ASVS L2 controls with evidence pointers, key
+    handling/rotation, least-privilege DB role and dev-data rules.
+    Records what is NOT yet verified rather than overclaiming.
+  - [x] T06.6 — Acceptance test for the evidenceable half.
+  - [x] T06.7 — Run acceptance test + full regression suite.
 
 ## Phase 2 — Client & engagement core
 
-- [ ] **T07 — Client registry.** Implement CLI01-06 (PRD §11): Party/
+- [x] **T07 — Client registry.** Implement CLI01-06 (PRD §11): Party/
   ClientRelationship/Contact model, duplicate resolution, guided intake,
   acceptance/conflict check, Client 360 screen.
   *Test: onboard a fictional company with two GST registrations and
   engagements in both practices; reject an unauthorised email change;
   no cross-practice data leaks via autocomplete.*
+  CLI05 (continuance/changes) is R1 — deferred.
+  - [x] T07.1 — Schema: `VerificationStatus`/`FieldSource` on identifiers
+    and contact channels (CLI03 — imported values stay UNVERIFIED),
+    `PartyGroupLink` (CLI01 group links), `ContactChangeRequest`
+    (authority-gated field changes), `AcceptanceCheck` (CLI04),
+    `IntakeDraft` (CLI03 incomplete drafts).
+  - [x] T07.2 — `src/lib/client-registry.ts`: CLI02 duplicate detection
+    that is NON-REVEALING across practices — staff learn a match exists
+    without learning whose client it is.
+  - [x] T07.3 — CLI03 guided intake: only the fields the selected
+    service needs, resumable drafts, verification status + source
+    recorded per critical field.
+  - [x] T07.4 — CLI04 acceptance & conflict check gating activation,
+    screening both practices without disclosing restricted detail.
+  - [x] T07.5 — Contact change authority: an unauthorised email change
+    is REJECTED and the source evidence retained.
+  - [x] T07.6 — API routes + CLI06 Client 360 screen with
+    permission-aware tabs, practices visibly separated.
+  - [x] T07.7 — Acceptance test: fictional company, two GST
+    registrations, director contact, engagements in BOTH practices;
+    unauthorised email change rejected; autocomplete and duplicate
+    detection leak nothing.
+  - [x] T07.8 — Run acceptance test + full regression suite.
 
-- [ ] **T08 — Engagements.** Implement ENG01-06 (PRD §12): service
+- [x] **T08 — Engagements.** Implement ENG01-06 (PRD §12): service
   catalogue templates, engagement record, letter generation, change
   control, closure/termination.
   *Test: change an accepted annual retainer to add litigation work — the
   original scope stays intact, a new fee/authority review appears,
   existing GST jobs are not recreated.*
+  ENG05 (full independence linkage across services) is R1. The
+  independence BLOCK named in the acceptance evidence is built here,
+  since it gates activation; the assessment behind it comes in R1.
+  - [x] T08.1 — Schema: `ServiceTemplate` (ENG01 versioned, with
+    checklist/steps/gates/fee model), ENG02 fields on `Engagement`
+    (scope, exclusions, fee basis, billing entity, planned dates,
+    retainer vs ad hoc, revision links), `EngagementLetter` (ENG03),
+    `EngagementChange` (ENG04), `EngagementBlock`.
+  - [x] T08.2 — ENG01 service catalogue + creating an engagement from a
+    pinned template version.
+  - [x] T08.3 — ENG03 letter generation from verified facts, review
+    routing, and typed consent / electronic acceptance / signature kept
+    as DISTINCT record types.
+  - [x] T08.4 — ENG04 change control: a post-acceptance scope, fee,
+    period or practice change creates a revision preserving the
+    original; practice reassignment additionally demands documented
+    client arrangements and new authority.
+  - [x] T08.5 — Activation gating: unresolved blocks prevent activation,
+    and an independence block is resolvable only by an ELIGIBLE reviewer
+    who is not the engagement owner.
+  - [x] T08.6 — ENG06 closure: distinguish completion / withdrawal /
+    cancellation / non-applicability; outstanding fees and retained
+    documents stay traceable after closure.
+  - [x] T08.7 — Acceptance test: annual retainer + litigation change;
+    original scope intact; fee AND authority review raised; existing GST
+    jobs NOT recreated; independence block prevents activation.
+  - [x] T08.8 — Run acceptance test + full regression suite.
 
 ## Phase 3 — Work & deadlines
 
-- [ ] **T09 — Work model & queues.** Implement WRK01-05 (PRD §13):
+- [x] **T09 — Work model & queues.** Implement WRK01-05 (PRD §13):
   Engagement/Job/Task/ChecklistItem/ClientRequest, state machine,
   recurrence with dedup key, dependencies/blocking, saved queues.
   Defer WRK06 (automation designer) to R1.
   *Test: run the monthly job generator twice — only one job exists per
   key; reopening a completed job doesn't alter its filing evidence.*
+  - [x] T09.1 — Schema: the full WRK02 `WorkState` set via a mapped enum
+    migration, `WorkStateTransition` (so reopening preserves completion
+    history), `ClientRequest`, `TimeEntry`, `WorkReassignment`, plus
+    WRK01 fields on Job/Task (priority, estimate, tags, required role on
+    checklist items, not-applicable reason).
+  - [x] T09.2 — WRK02 state machine with legal transitions enforced
+    server-side, and every transition recorded with actor and reason.
+  - [x] T09.3 — WRK03 recurrence: dedup key is practice + client
+    relationship + stable template/obligation identity + period. The
+    template VERSION is snapshot metadata and must NOT be part of the
+    dedup identity — otherwise editing a template silently duplicates
+    every open job. Bulk preview before creation.
+  - [x] T09.4 — WRK04 dependencies and blocking: a task blocks on a
+    missing predecessor or evidence; a client delay pauses the internal
+    SLA clock ONLY, never the statutory deadline, and escalation
+    continues regardless.
+  - [x] T09.5 — WRK05 saved queues (My work, Team work, Review queue,
+    Waiting for client, Overdue) and reassignment carrying reason,
+    active timers and pending approvals; employee exit produces a
+    handover list rather than orphaned jobs.
+  - [x] T09.6 — Acceptance test: generator run twice yields ONE job per
+    key; requesting changes after review invalidates the prior approval;
+    reopening a completed job preserves its filing evidence and
+    completion history.
+  - [x] T09.7 — Run acceptance test + full regression suite.
 
-- [ ] **T10 — Statutory calendar.** Implement DUE01-04, DUE06 (PRD §14):
+- [x] **T10 — Statutory calendar.** Implement DUE01-04, DUE06 (PRD §14):
   obligation rules, deadline instances, extensions with preview, alerts
   requiring acknowledgement evidence. Defer DUE05 (regulatory update
   inbox, AI-assisted) to R2.
   *Test: an extension applicable to one taxpayer class changes only
   matching open obligations; an obligation with unknown category stays
   in "Review required".*
+  NOTE: TASKS.md defers DUE05 to R2, but PRD §14 marks it **R1**. The
+  PRD is authoritative; either way it is not built in R0.
+  - [x] T10.1 — Schema DUE01: full `ObligationRule` (jurisdiction,
+    governing law, service, taxpayer category, applicability, period,
+    form version, due-date expression, authoritative source + date,
+    effective interval, approving CA) with Draft/Reviewed/Active/
+    Superseded/Retired lifecycle.
+  - [x] T10.2 — Schema DUE02: the five distinct dates per instance
+    (original statutory, current statutory, internal prep target,
+    review target, client cutoff, payment deadline) and — per the PRD's
+    closing note — **law, assessment year and tax year stored
+    INDEPENDENTLY**, so the filing date alone never selects the Act.
+  - [x] T10.3 — DUE04 status set (Due soon, Overdue, Waiting, Submitted
+    awaiting acknowledgement, Filed, Rejected, Not applicable) via a
+    mapped enum migration, keeping Review required for unknown
+    applicability.
+  - [x] T10.4 — DUE03 extensions: an approved notification PREVIEWS
+    affected open instances, applies only to matching category/period/
+    jurisdiction, preserves old values with the source, and never
+    reopens completed filings.
+  - [x] T10.5 — DUE04 alerts and filing evidence: escalation by interval
+    and responsible role; filing requires an acknowledgement reference
+    AND reviewer confirmation; a BOUNCED reminder is never evidence of
+    client receipt.
+  - [x] T10.6 — DUE06 calendar behaviour: India defaults, date-only
+    statutory obligations, holidays may move internal reminders but
+    never statutory dates, and a missed scheduler run produces catch-up
+    alerts without duplicates.
+  - [x] T10.7 — Acceptance test: an extension for ONE taxpayer class
+    changes only those open obligations, the audit trail shows BOTH
+    dates, an unknown category stays in Review required, and a bounced
+    reminder is not receipt.
+  - [x] T10.8 — Run acceptance test + full regression suite.
 
 ## Phase 4 — Documents & communication
 
-- [ ] **T11 — Document management.** Implement DOC01-04, DOC06 (PRD §15):
+- [x] **T11 — Document management.** Implement DOC01-04, DOC06 (PRD §15):
   intake with malware/MIME scanning, immutable versioned originals,
   classification, release/sharing with expiring links, retention/lock.
   Defer DOC05 (physical register) to R1.
   *Test: upload the same filename twice — both versions preserved;
   revoke a user — their signed object link and search results stop
   working immediately.*
+  Full PRD evidence also requires: quarantine a malformed archive, and a
+  client can see the released report but cannot discover internal
+  working paper titles. Plus the section's closing rule — redaction
+  produces a DERIVATIVE with a review record; black rectangles alone are
+  not proof.
+  - [x] T11.1 — Schema + migration `20260909090000_documents`: DOC01
+    intake provenance (filename, declared vs detected MIME, size,
+    received time, checklist link, quarantine state + rejection reason),
+    DOC02 immutability guard fields (approvedAt on a version, supersede
+    links), DOC03 `documentType`/period/entity/sensitivity +
+    `DocumentClassification` draft metadata with correction history,
+    DOC04 `DocumentKind` (INTERNAL / CLIENT_SUPPLIED / DELIVERABLE) +
+    `DocumentRelease` + `DocumentAccessToken`, DOC06 `DocumentSet`
+    manifest + `RetentionPolicy` + `DeletionRequest`.
+  - [x] T11.2 — `src/lib/object-store.ts`: MinIO-backed content-addressed
+    storage over hand-rolled SigV4 (no new dependency). Object keys are
+    prefixed with the practice `documentNamespace` (ORG04). Records WHY
+    a raw presigned URL is never handed to an end user.
+  - [x] T11.3 — `src/lib/document-intake.ts` (DOC01): magic-byte MIME
+    detection compared against the declared type, size cap,
+    decompression-ratio/zip-bomb limit, pluggable malware scanner,
+    quarantine + actionable rejection reason. Nothing reaches the store
+    until it passes.
+  - [x] T11.4 — `src/lib/documents.ts` (DOC02): same filename creates
+    version n+1; an APPROVED original can never be overwritten by an
+    edit, OCR, conversion or integration retry — those produce
+    derivatives. Preparer / reviewer / status per version.
+  - [x] T11.5 — DOC03 classification + search: results, counts, snippets
+    and suggestions all pass the practice scope + field permission check
+    BEFORE anything is returned. OCR/AI classifications are DRAFT with a
+    source reference and correction history.
+  - [x] T11.6 — DOC04 release: a reviewer releases an EXACT version to
+    named portal contacts; links expire, re-authorise at redemption and
+    die on permission change; internal working papers are never
+    automatically deliverable. Redaction produces a derivative with a
+    review record.
+  - [x] T11.7 — DOC06 lock & retention: finalise a set through a manifest
+    of versions + hashes; retention schedule and legal hold by record
+    class; deletion requires eligibility check + approval + logged
+    action, and backups keep their own expiry.
+  - [x] T11.8 — API routes (upload, versions, search, release, link
+    redeem) and replace the T03 placeholder in
+    `api/documents/[versionId]/link` with the real implementation.
+  - [x] T11.9 — Acceptance test `tests/t11-documents.ts` covering all
+    four PRD evidence points + redaction.
+  - [x] T11.10 — Run the acceptance test + full regression suite.
 
-- [ ] **T12 — Communication core.** Implement COM01-04 (PRD §16):
+- [x] **T12 — Communication core.** Implement COM01-04 (PRD §16):
   unified context, structured client requests, outbound safeguards
   (recipient verification), reminder engine with duplicate keys.
   Defer COM05/06 to R1/R2.
   *Test: trigger the same reminder through two workers — only one
   logical message sends; a staff member switching practice cannot send
   a Company invoice from an Associates identity.*
+  - [x] T12.1 — Schema + migration `20260909100000_communication`:
+    COM01 MessageThread / Message / ThreadVisibilityChange; COM02
+    ClientRequestItem / ClientRequestItemResponse + closeRule on
+    ClientRequest; COM03 MessageTemplate / OutboundMessage /
+    OutboundRecipient / RecipientVerification; COM04 OutboundState enum,
+    DeliveryAttempt, NotificationPreference. Purely additive, written
+    idempotently.
+  - [x] T12.2 — Permissions: add `message.post_internal`,
+    `message.send_client`, `thread.change_visibility` to the IAM02 matrix.
+  - [x] T12.3 — `src/lib/communication.ts` COM01: threads, messages,
+    preview-gated visibility change (digest must match at commit).
+  - [x] T12.4 — COM02: itemised requests, per-item responses, close rule
+    (received vs accepted), reminder suppression per item only.
+  - [x] T12.5 — COM03: outbound preview + send safeguards (practice
+    identity binding, recipient authority, changed-recipient
+    verification, portal link over attachment, template rendering).
+  - [x] T12.6 — COM04: reminder engine — dedup key, quiet hours, digest,
+    retry limits, bounce handling, six separate delivery states.
+  - [x] T12.7 — API routes for threads, client requests and outbound send.
+  - [x] T12.8 — Acceptance test `tests/t12-communication.ts` covering the
+    three PRD evidence points + the safeguards.
+  - [x] T12.9 — Run the acceptance test + full regression suite.
 
 - [ ] **T13 — Client portal.** Implement POR01-03, POR05 (PRD §17):
   portal home, contact authority with entity switcher, guided upload.
@@ -210,11 +434,55 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
   the current version can be approved; two invoice-issue clicks create
   one invoice.*
 
-- [ ] **T16 — Navigation & UX states.** Implement UX01-05, NAV01-04
+- [~] **T16 — Navigation & UX states.** Implement UX01-05, NAV01-04
   (PRD §38-39): light/dark themes, five states per screen, accessible
   identity cues, safe action confirmation.
   *Test: complete client onboarding, document review, and invoice issue
   using only the keyboard, in both themes.*
+  NOTE: built out of order at the owner's request, after T12. This is
+  safe — the UX shell sits on top of modules already built and nothing
+  in T13/T14/T15 is a dependency of it. But the acceptance test's third
+  leg, INVOICE ISSUE, needs T14 (FIN01/FIN02/FIN04), which does not
+  exist yet. The parent box therefore stays `[~]` until T14 lands and
+  that leg is exercised.
+  - [x] T16.1 — Design tokens + theme (UX01-03): light/dark/system
+    palettes defined as token pairs (not an inversion), 16px body / 14px
+    tables, 44px targets, visible focus, print style.
+  - [x] T16.2 — Theme preference saved per user + a switch that
+    preserves scroll, draft and selected record. Migration
+    20260909110000_ux_preferences (User.themePreference/densityPreference,
+    both defaulted, purely additive).
+  - [x] T16.3 — Five-state primitives (NAV03) in `src/components/states.tsx`.
+  - [x] T16.4 — App shell + NAV01 menu + UX05 identity cues, including
+    the cross-practice warning that names BOTH source and destination.
+  - [x] T16.5 — NAV02: permission-aware global search (`/api/search`),
+    breadcrumbs, Back destination, recents scoped per practice in
+    sessionStorage.
+  - [x] T16.6 — NAV04 safe actions in `src/components/safe-action.tsx`.
+  - [x] T16.7 — Screens: Home, My work, Clients, Client workspace, Job
+    detail, Review queue, Documents, Calendar, Practice, plus Team,
+    Document detail and Obligation detail. No dangling destinations remain:
+    `/team`, `/documents/[documentId]` and `/obligations/[obligationId]`
+    are built; `/billing` (T14) and `/reports` (T17) do not exist, so
+    their NAV01 pins are withheld — ux.ts keeps both entries with
+    `built: false` and names the task that turns each on. TURN THE PIN
+    BACK ON as part of T14 and T17. The t16 test now walks every href in
+    the rendered menu and requires a 200, so this cannot recur silently.
+  - [x] T16.8 — `tests/t16-ux.ts`: 28 token pairings x 2 themes recomputed
+    from globals.css, plus NAV01/02/03/04, UX01/03/05 and the two §39
+    evidence points asserted against real rendered HTML over HTTP.
+    RUN GREEN: 72/72. Three real faults fixed on the way (client bundle
+    importing `next/headers` via csrf.ts, `localhost`/IPv6 in DATABASE_URL,
+    and a NAV02 assertion that passed for the wrong reason) — see
+    PROGRESS.md.
+  - [~] T16.9 — Full regression suite run: T02 13, T03 23, T04 37, T05 54,
+    T06 44, T07 55, T08 55, T09 60, T10 56, T11 110, T12 106, T16 73
+    = 686 assertions, all green. Caught and fixed a real regression T16
+    had introduced in the `/api/search` contract that T03 depends on.
+    OUTSTANDING: the manual browser pass (keyboard only, 200% zoom, both
+    themes) — the structural half is asserted in t16-ux.ts, the physical
+    half still needs a person at a browser. See PROGRESS.md for the
+    sign-in steps and `npm run dev:walk`.
 
 - [ ] **T17 — Reports shell.** Implement REP01 (PRD §40): filtered
   reports with refresh time, formula definition, record count; empty
@@ -236,3 +504,4 @@ drill and realistic client workflow pass." Run the full §42 acceptance
 scenario table before starting R1. Then create `TASKS-R1.md` following
 the same pattern, using PRD §18-24, §26-28 and the R1 rows of the §47-49
 traceability index.
+

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getAccessiblePracticeIds, findActiveShare } from "@/lib/practice-scope";
 import { requireUserId } from "@/lib/session";
 import { errorResponse } from "@/lib/api";
+import { issueAccessToken } from "@/lib/documents";
 
 export const dynamic = "force-dynamic";
 
@@ -83,26 +84,24 @@ export async function GET(
       );
     }
 
-    // Real signed-URL minting against MinIO lands in T11; the authorisation
-    // decision that gates it is what T03 is responsible for.
-    const expiresAt = new Date(Date.now() + 5 * 60_000);
-
-    await prisma.event.create({
-      data: {
-        practiceId: version.practiceId,
-        actorUserId: userId,
-        targetType: "DocumentVersion",
-        targetId: version.id,
-        action: "OBJECT_LINK_ISSUED",
-        result: "SUCCESS",
-        afterMeta: { via, expiresAt: expiresAt.toISOString() },
-      },
+    // T11 (DOC04): the link handed back is a token bound to a row that is
+    // re-authorised on every redemption, NOT a presigned object-store URL.
+    // A presigned URL would stay valid for its full lifetime even after this
+    // user is suspended, which is exactly what DOC04 forbids. The plaintext
+    // token is returned once and only its hash is stored.
+    const link = await issueAccessToken({
+      practiceId: version.practiceId,
+      documentVersionId: version.id,
+      issuedToUserId: userId,
+      issuedByUserId: userId,
+      purpose: via === "share" ? "CROSS_PRACTICE_SHARE" : "STAFF_ACCESS",
+      ttlMs: 5 * 60_000,
     });
 
     return NextResponse.json({
       versionId: version.id,
-      storageObjectId: version.storageObjectId,
-      expiresAt: expiresAt.toISOString(),
+      url: `/api/documents/link?t=${link.token}`,
+      expiresAt: link.expiresAt.toISOString(),
       via,
     });
   } catch (e) {

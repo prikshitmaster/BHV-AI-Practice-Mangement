@@ -1,26 +1,802 @@
 @import "tailwindcss";
 
+/* ===========================================================================
+   BHV Practice Management — design tokens (UX01-03, PRD §38)
+   ===========================================================================
+
+   Light and dark are authored as two INDEPENDENT palettes, not one inverted.
+   The PRD is explicit about this: "Validate each final token pairing,
+   including errors and disabled states, rather than assuming dark mode is a
+   colour inversion." Inverting produces muddy mid-tones for exactly the
+   states that matter most — errors and disabled controls — because those
+   already sit away from the ends of the scale.
+
+   Every foreground/background pair below is checked by tests/t16-ux.ts, which
+   recomputes its WCAG contrast ratio from these values. Editing a colour here
+   without re-running that test is how an accessible palette quietly stops
+   being one.
+
+   Thresholds applied (UX03):
+     normal text            >= 4.5:1
+     large text (>=24px, or >=19px bold)  >= 3:1
+     meaningful boundaries and control edges  >= 3:1
+   =========================================================================== */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+
+  /* Surfaces */
+  --surface: #f4f6f8;
+  --surface-raised: #ffffff;
+  --surface-sunken: #e7ebef;
+  --surface-inverse: #1c2127;
+
+  /* Text. Each is checked against --surface AND --surface-raised. */
+  --text-primary: #14181d;
+  --text-secondary: #4c545e;
+  --text-muted: #616a75;
+  --text-on-accent: #ffffff;
+  --text-on-inverse: #f2f4f6;
+
+  /* Borders. `subtle` is decorative and exempt from the 3:1 rule; `strong`
+     carries meaning (control edges, table rules) and is not. */
+  --border-subtle: #dde2e7;
+  --border-strong: #79828d;
+
+  /* Accent — one, used for the primary action only. */
+  --accent: #14548a;
+  --accent-hover: #0f4370;
+  --accent-subtle-bg: #e8f0f7;
+
+  /* Status. Always paired with a text label and an icon: colour alone never
+     carries the meaning (UX04). */
+  --success: #14653c;
+  --success-bg: #e4f2e9;
+  --warning: #7a4d00;
+  --warning-bg: #fbeed6;
+  --danger: #97121b;
+  --danger-bg: #fbe6e7;
+  --info: #14548a;
+  --info-bg: #e8f0f7;
+
+  /* Disabled. Deliberately given its own tokens rather than an opacity —
+     opacity on an inherited colour produces an unpredictable final ratio. */
+  --disabled-bg: #e7ebef;
+  --disabled-text: #5d666f;
+  --disabled-border: #a8b0b8;
+
+  /* Focus. Visible against every surface above; never removed. */
+  --focus-ring: #0b4a80;
+  --focus-ring-offset: #ffffff;
+
+  /* Practice markers (UX05). These SUPPLEMENT the practice name; they never
+     replace it, so they are not held to a text-contrast threshold. */
+  --practice-marker-a: #5b3f87;
+  --practice-marker-b: #0f5f5a;
+
+  /* Type and spacing (UX02) */
+  --font-body: 16px;
+  --font-table: 14px;
+  --line-body: 1.55;
+  --radius: 6px;
+  --space: 8px;
+  --touch-target: 44px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* An explicit choice wins over the system setting in both directions, which
+   is why the dark palette is declared twice rather than only in the media
+   query. UX01 requires Light, Dark AND System to be real options. */
+:root[data-theme="dark"],
+:root:not([data-theme="light"]) {
+  /* placeholder — real values are set in the two blocks below */
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --surface: #14181d;
+    --surface-raised: #1c2127;
+    --surface-sunken: #0e1114;
+    --surface-inverse: #e7ebef;
+
+    --text-primary: #e9ecef;
+    --text-secondary: #b9c1ca;
+    --text-muted: #9aa4ae;
+    --text-on-accent: #06131f;
+    --text-on-inverse: #14181d;
+
+    --border-subtle: #2c333b;
+    --border-strong: #767f8a;
+
+    --accent: #7db4e0;
+    --accent-hover: #a3cbeb;
+    --accent-subtle-bg: #16222d;
+
+    --success: #6fc492;
+    --success-bg: #12241a;
+    --warning: #d8a955;
+    --warning-bg: #241c0d;
+    --danger: #ef9297;
+    --danger-bg: #2a1416;
+    --info: #7db4e0;
+    --info-bg: #16222d;
+
+    --disabled-bg: #22282f;
+    --disabled-text: #99a2ac;
+    --disabled-border: #4a525b;
+
+    --focus-ring: #8fc2ea;
+    --focus-ring-offset: #14181d;
+
+    --practice-marker-a: #b49ae0;
+    --practice-marker-b: #5fbfb6;
   }
 }
 
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --surface: #14181d;
+  --surface-raised: #1c2127;
+  --surface-sunken: #0e1114;
+  --surface-inverse: #e7ebef;
+
+  --text-primary: #e9ecef;
+  --text-secondary: #b9c1ca;
+  --text-muted: #9aa4ae;
+  --text-on-accent: #06131f;
+  --text-on-inverse: #14181d;
+
+  --border-subtle: #2c333b;
+  --border-strong: #767f8a;
+
+  --accent: #7db4e0;
+  --accent-hover: #a3cbeb;
+  --accent-subtle-bg: #16222d;
+
+  --success: #6fc492;
+  --success-bg: #12241a;
+  --warning: #d8a955;
+  --warning-bg: #241c0d;
+  --danger: #ef9297;
+  --danger-bg: #2a1416;
+  --info: #7db4e0;
+  --info-bg: #16222d;
+
+  --disabled-bg: #22282f;
+  --disabled-text: #99a2ac;
+  --disabled-border: #4a525b;
+
+  --focus-ring: #8fc2ea;
+  --focus-ring-offset: #14181d;
+
+  --practice-marker-a: #b49ae0;
+  --practice-marker-b: #5fbfb6;
+}
+
+/* ---------------------------------------------------------------- base */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  /* UX03 reflow: nothing may depend on a fixed viewport width. */
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  background: var(--surface);
+  color: var(--text-primary);
+  /* UX02: a readable sans serif at 16px. System stack — no webfont round
+     trip on a LAN-first deployment, and no rendering surprise offline. */
+  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial,
+    sans-serif;
+  font-size: var(--font-body);
+  line-height: var(--line-body);
+}
+
+/* UX02: "restrained elevation... no constant animation". Motion is limited to
+   state changes the user initiated, and removed entirely on request. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* UX03: focus is always visible.
+   The box-shadow is not decoration — it is a separator ring that fills the
+   outline's offset gap with a known colour. Without it, focusing the primary
+   button puts a dark blue ring 2px away from a dark blue fill (1.16:1 in both
+   themes), and the indicator on the single most important control in the app
+   is the one you cannot see. With it, the ring is always read against
+   --focus-ring-offset, whatever happens to be behind the control. */
+:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--focus-ring-offset);
+  border-radius: 3px;
+}
+
+/* Skip link — the first stop for a keyboard user (NAV02 / UX03). */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  padding: 12px 16px;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-weight: 600;
+}
+.skip-link:focus {
+  left: 8px;
+  top: 8px;
+}
+
+/* ------------------------------------------------------------- layout */
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "identity topbar"
+    "nav main";
+  min-height: 100vh;
+}
+
+/* UX03 reflow at 200% zoom: the sidebar stacks rather than scrolling
+   horizontally. 320px-equivalent is the target the requirement implies. */
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "identity"
+      "topbar"
+      "nav"
+      "main";
+  }
+}
+
+.identity-bar {
+  grid-area: identity;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--surface-raised);
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.top-bar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.side-nav {
+  grid-area: nav;
+  padding: 12px 8px;
+  background: var(--surface-raised);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.main-region {
+  grid-area: main;
+  padding: 24px;
+  max-width: 1200px;
+}
+
+/* --------------------------------------------------------------- nav */
+
+.nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--touch-target);
+  padding: 0 12px;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 15px;
+}
+.nav-link:hover {
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+}
+/* Current page is marked by aria-current, and the style keys off that
+   attribute — so the visual state and the announced state cannot drift. */
+.nav-link[aria-current="page"] {
+  background: var(--accent-subtle-bg);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.nav-section-label {
+  padding: 12px 12px 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------- identity */
+
+/* UX05: the full practice name, always. The marker dot is decoration beside
+   it — it is never the only thing distinguishing two firms. */
+.practice-marker {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+}
+.practice-marker--a {
+  background: var(--practice-marker-a);
+}
+.practice-marker--b {
+  background: var(--practice-marker-b);
+}
+
+.practice-name {
+  font-weight: 650;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+/* -------------------------------------------------------------- type */
+
+h1 {
+  font-size: 26px;
+  line-height: 1.25;
+  margin: 0 0 4px;
+}
+h2 {
+  font-size: 20px;
+  line-height: 1.3;
+  margin: 32px 0 8px;
+}
+h3 {
+  font-size: 17px;
+  margin: 24px 0 8px;
+}
+.page-lede {
+  color: var(--text-secondary);
+  margin: 0 0 24px;
+  max-width: 70ch;
+}
+
+/* ------------------------------------------------------------- cards */
+
+.card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+.card + .card {
+  margin-top: 12px;
+}
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+/* ----------------------------------------------------------- buttons */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: var(--touch-target);
+  min-width: var(--touch-target);
+  padding: 0 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  background: var(--surface-sunken);
+}
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+  font-weight: 600;
+}
+.btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.btn--danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* NAV04: a pending action is disabled and SAYS it is pending. Disabled here
+   has its own tokens, tested like any other pairing — a control the user
+   cannot read is not a safe way to communicate "wait". */
+.btn:disabled {
+  background: var(--disabled-bg);
+  border-color: var(--disabled-border);
+  color: var(--disabled-text);
+  cursor: not-allowed;
+}
+
+/* -------------------------------------------------------------- form */
+
+.field {
+  display: block;
+  margin-bottom: 16px;
+  max-width: 42rem;
+}
+.field-label {
+  display: block;
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+.field-hint {
+  display: block;
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.field-input {
+  display: block;
+  width: 100%;
+  min-height: var(--touch-target);
+  padding: 8px 12px;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+.field-input[aria-invalid="true"] {
+  border-color: var(--danger);
+  border-width: 2px;
+}
+/* UX03 "error association": the message is bound to the input by
+   aria-describedby, and carries a text prefix so the meaning does not depend
+   on the red. */
+.field-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------- table */
+
+/* UX04: 14px is permitted for tables. Amounts align right, identifiers stay
+   readable, long labels wrap rather than truncate. */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-table);
+  background: var(--surface-raised);
+}
+.data-table caption {
+  text-align: left;
+  padding: 12px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+.data-table th {
+  border-bottom: 2px solid var(--border-strong);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.data-table td.numeric,
+.data-table th.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.table-scroll {
+  overflow-x: auto;
+}
+
+/* ------------------------------------------------------------ status */
+
+/* UX04: "Never use colour alone for overdue / complete." Every pill renders a
+   text label, and the ::before glyph gives a second non-colour channel. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 650;
+  border: 1px solid currentColor;
+}
+.status--ok {
+  color: var(--success);
+  background: var(--success-bg);
+}
+.status--ok::before {
+  content: "✓";
+}
+.status--warn {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+.status--warn::before {
+  content: "!";
+}
+.status--overdue {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.status--overdue::before {
+  content: "▲";
+}
+.status--info {
+  color: var(--info);
+  background: var(--info-bg);
+}
+.status--info::before {
+  content: "i";
+}
+
+/* ------------------------------------------------------------- states */
+
+/* NAV03 five states. One visual family so a user learns them once. */
+.state {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  padding: 32px 24px;
+  text-align: center;
+}
+.state-title {
+  font-size: 17px;
+  font-weight: 650;
+  margin: 0 0 4px;
+}
+.state-body {
+  color: var(--text-secondary);
+  margin: 0 auto 16px;
+  max-width: 52ch;
+}
+.state--error {
+  border-color: var(--danger);
+  border-left-width: 4px;
+}
+.state--conflict {
+  border-color: var(--warning);
+  border-left-width: 4px;
+}
+
+/* Loading is a skeleton, not a spinner: it reserves the layout so the page
+   does not jump when content lands, and it is announced politely. */
+.skeleton-row {
+  height: 18px;
+  margin-bottom: 10px;
+  border-radius: 3px;
+  background: var(--surface-sunken);
+}
+
+/* ------------------------------------------------------------ banners */
+
+.banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  border: 1px solid;
+  margin-bottom: 16px;
+}
+.banner--warning {
+  color: var(--warning);
+  background: var(--warning-bg);
+  border-color: var(--warning);
+}
+.banner--danger {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-color: var(--danger);
+}
+.banner--info {
+  color: var(--info);
+  background: var(--info-bg);
+  border-color: var(--info);
+}
+.banner strong {
+  color: inherit;
+}
+.banner p {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+}
+
+/* ------------------------------------------------------------- dialog */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.55);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  z-index: 50;
+}
+.dialog {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 24px;
+  max-width: 34rem;
+  width: 100%;
+}
+.dialog h2 {
+  margin-top: 0;
+}
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+
+/* ------------------------------------------------- theme + density */
+
+/* The radio itself is visually hidden but still focusable, so the visible
+   label carries the focus ring via :focus-within. Keyboard users get the same
+   indicator as everyone else rather than a hidden control nobody can see. */
+.theme-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-size: 14px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.theme-option:hover {
+  background: var(--surface-sunken);
+}
+.theme-option:has(input:checked) {
+  background: var(--accent-subtle-bg);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 650;
+}
+.theme-option:focus-within {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--focus-ring-offset);
+}
+
+/* UX02 optional comfortable density. Compact tightens the table only — body
+   text stays at 16px, because the requirement warns against small essential
+   text, not against dense tables. */
+:root[data-density="compact"] .data-table th,
+:root[data-density="compact"] .data-table td {
+  padding: 5px 10px;
+}
+:root[data-density="compact"] .card {
+  padding: 12px;
+}
+
+/* ------------------------------------------------------------ utility */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.spacer {
+  flex: 1 1 auto;
+}
+.muted {
+  color: var(--text-muted);
+}
+.secondary {
+  color: var(--text-secondary);
+}
+.breadcrumbs {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+.breadcrumbs a {
+  color: var(--accent);
+}
+.breadcrumbs li {
+  display: inline;
+}
+.breadcrumbs ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: inline;
+}
+.breadcrumbs li + li::before {
+  content: " / ";
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------- print */
+
+/* UX01: "Printable outputs use an approved light document style unless
+   explicitly requested otherwise." Dark mode must not produce a black page. */
+@media print {
+  :root,
+  :root[data-theme="dark"] {
+    --surface: #ffffff;
+    --surface-raised: #ffffff;
+    --surface-sunken: #ffffff;
+    --text-primary: #000000;
+    --text-secondary: #1f2429;
+    --text-muted: #33393f;
+    --border-subtle: #9aa0a6;
+    --border-strong: #33393f;
+    --accent: #0d3c63;
+    color-scheme: light;
+  }
+  .side-nav,
+  .top-bar,
+  .skip-link,
+  .no-print {
+    display: none !important;
+  }
+  .app-shell {
+    display: block;
+  }
+  .main-region {
+    padding: 0;
+    max-width: none;
+  }
 }

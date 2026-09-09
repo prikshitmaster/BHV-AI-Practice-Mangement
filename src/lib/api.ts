@@ -8,17 +8,64 @@
 
 import { NextResponse } from "next/server";
 import { PracticeAccessError } from "@/lib/practice-scope";
+import { PermissionDeniedError } from "@/lib/permissions";
+import { DocumentError } from "@/lib/documents";
+import { IntakeError } from "@/lib/document-intake";
+import { CommunicationError } from "@/lib/communication";
+import { CsrfError } from "@/lib/csrf-shared";
 import { UnauthenticatedError } from "@/lib/session";
+import { AuthError, RateLimitError } from "@/lib/auth";
+import { LoginChallengeError } from "@/lib/login-challenge";
 
 export function errorResponse(e: unknown): NextResponse {
   if (e instanceof UnauthenticatedError) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
+  // AUTH01-03 login/MFA refusals: the code lets the login form show a
+  // specific message (rate limited, locked, wrong code) without ever
+  // distinguishing "unknown email" from "wrong password".
+  if (e instanceof AuthError || e instanceof RateLimitError || e instanceof LoginChallengeError) {
+    return NextResponse.json({ error: e.message, code: e.code }, { status: e.status });
+  }
   if (e instanceof PracticeAccessError) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+  if (e instanceof CsrfError) {
+    return NextResponse.json({ error: "Request refused", code: e.code }, { status: 403 });
+  }
+  if (e instanceof PermissionDeniedError) {
+    // Membership is already established here, so naming the action is safe —
+    // it tells a legitimate member what they lack, not an outsider what exists.
+    return NextResponse.json(
+      { error: "Permission denied", action: e.action },
+      { status: 403 },
+    );
+  }
+  // DOC01/DOC02 refusals are the user-facing half of the intake contract: the
+  // uploader must be told what to do about it, so the code and detail are
+  // deliberately returned. Neither carries record content.
+  // COM01-04 refusals are the same shape and for the same reason: a sender who
+  // is stopped must be told which safeguard stopped them, or they will work
+  // around it. None of these messages carries record content.
+  if (e instanceof DocumentError || e instanceof IntakeError || e instanceof CommunicationError) {
+    return NextResponse.json({ error: e.message, code: e.code }, { status: e.status });
+  }
 
   console.error("Unhandled API error:", e);
+
+  // Detail is returned only outside production. SEC03: a production error must
+  // not disclose internals, but a developer needs more than "500".
+  if (process.env.NODE_ENV !== "production") {
+    return NextResponse.json(
+      {
+        error: "Internal server error",
+        devMessage: e instanceof Error ? e.message : String(e),
+        devStack: e instanceof Error ? e.stack?.split("\n").slice(0, 5) : undefined,
+      },
+      { status: 500 },
+    );
+  }
+
   return NextResponse.json({ error: "Internal server error" }, { status: 500 });
 }
 

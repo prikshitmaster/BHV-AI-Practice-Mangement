@@ -1,24 +1,31 @@
 "use client";
 
 /**
- * ORG03 firm switcher.
+ * Practice switcher — ORG03 (PRD §7) and UX05 (PRD §38).
  *
- * Three rules from the PRD drive this component:
+ * Four rules drive this component:
  *   1. the active practice is visible at all times, not buried in a menu;
  *   2. in Combined view, creating anything requires choosing a practice
  *      first — there is no implicit "current" firm to fall back on;
  *   3. changing context clears or revalidates selected recipients, accounts
- *      and drafts, because they were chosen under the old identity.
+ *      and drafts, because they were chosen under the old identity;
+ *   4. UX05: the warning before a cross-practice change must NAME BOTH the
+ *      source and the destination. Colour is not sufficient, and neither is
+ *      naming only the firm you are leaving — the whole risk is not knowing
+ *      which letterhead the next thing you do goes out under.
+ *
+ * Unlike the theme control, switching practice DOES reload: ORG03 requires
+ * work chosen under the old identity to be revalidated, so carrying the page
+ * across would be the bug, not the feature.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
 export type PracticeSummary = {
   id: string;
   name: string;
-  registeredDisplayName: string | null;
-  constitution: string;
-  readOnlyFrom: string | null;
+  marker: "a" | "b";
+  readOnly: boolean;
 };
 
 export const COMBINED_VIEW = "__combined__";
@@ -26,107 +33,93 @@ export const COMBINED_VIEW = "__combined__";
 type Props = {
   practices: PracticeSummary[];
   activePracticeId: string;
-  onContextChange: (practiceId: string) => void;
-  /** Called when a switch invalidates in-progress work (ORG03). */
-  onDraftInvalidated?: () => void;
+  /** ORG03: set when the user has typed something not yet saved. */
   hasUnsavedDraft?: boolean;
 };
 
-export function FirmSwitcher({
-  practices,
-  activePracticeId,
-  onContextChange,
-  onDraftInvalidated,
-  hasUnsavedDraft = false,
-}: Props) {
+export function FirmSwitcher({ practices, activePracticeId, hasUnsavedDraft = false }: Props) {
   const [pendingSwitch, setPendingSwitch] = useState<string | null>(null);
 
-  const applySwitch = useCallback(
-    (next: string) => {
-      onContextChange(next);
-      onDraftInvalidated?.();
-      setPendingSwitch(null);
-    },
-    [onContextChange, onDraftInvalidated],
-  );
+  const active = practices.find((p) => p.id === activePracticeId) ?? null;
+  const destination = practices.find((p) => p.id === pendingSwitch) ?? null;
 
-  const requestSwitch = (next: string) => {
+  function applySwitch(next: string) {
+    // A year is fine: this is a display preference, and the server re-checks
+    // membership on every request regardless of what the cookie claims.
+    document.cookie = `bhv_practice=${encodeURIComponent(next)}; path=/; max-age=31536000; samesite=lax`;
+    window.location.assign(window.location.pathname);
+  }
+
+  function requestSwitch(next: string) {
     if (next === activePracticeId) return;
-    // Never silently discard work the user typed under the other identity.
-    if (hasUnsavedDraft) setPendingSwitch(next);
-    else applySwitch(next);
-  };
-
-  const active =
-    activePracticeId === COMBINED_VIEW
-      ? null
-      : practices.find((p) => p.id === activePracticeId);
-
-  const isReadOnly = active?.readOnlyFrom != null;
+    setPendingSwitch(next);
+  }
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-3">
-        <label htmlFor="firm-switcher" className="text-sm font-medium">
-          Practice
-        </label>
+    <>
+      <label htmlFor="firm-switcher" className="visually-hidden">
+        Active practice
+      </label>
+      <select
+        id="firm-switcher"
+        className="field-input"
+        style={{ maxWidth: "22rem", minHeight: 36 }}
+        value={activePracticeId}
+        onChange={(e) => requestSwitch(e.target.value)}
+      >
+        <option value={COMBINED_VIEW}>Combined view (read only)</option>
+        {practices.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+            {p.readOnly ? " (read only)" : ""}
+          </option>
+        ))}
+      </select>
 
-        <select
-          id="firm-switcher"
-          value={activePracticeId}
-          onChange={(e) => requestSwitch(e.target.value)}
-          className="rounded border px-2 py-1 text-sm"
-          // NAV03: identity must be conveyed by more than colour.
-          aria-label="Active practice"
-        >
-          <option value={COMBINED_VIEW}>Combined view (read only)</option>
-          {practices.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.registeredDisplayName ?? p.name}
-            </option>
-          ))}
-        </select>
-
-        <span
-          className="rounded bg-neutral-200 px-2 py-1 text-xs font-semibold dark:bg-neutral-700"
-          data-testid="active-practice-badge"
-        >
-          {active ? (active.registeredDisplayName ?? active.name) : "Combined — choose a practice to create"}
-        </span>
-
-        {isReadOnly && (
-          <span className="rounded bg-amber-200 px-2 py-1 text-xs text-amber-900">
-            Read only
-          </span>
-        )}
-      </div>
-
-      {pendingSwitch && (
-        <div role="alertdialog" aria-labelledby="switch-warning" className="rounded border p-3 text-sm">
-          <p id="switch-warning">
-            Switching practice clears the recipients, bank account and draft you
-            selected under{" "}
-            <strong>{active?.registeredDisplayName ?? active?.name ?? "Combined view"}</strong>.
-          </p>
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              className="rounded border px-2 py-1"
-              onClick={() => applySwitch(pendingSwitch)}
-            >
-              Switch and clear draft
-            </button>
-            <button
-              type="button"
-              className="rounded border px-2 py-1"
-              onClick={() => setPendingSwitch(null)}
-            >
-              Stay here
-            </button>
+      {pendingSwitch && destination ? (
+        <div className="dialog-backdrop">
+          <div
+            className="dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="switch-title"
+            aria-describedby="switch-body"
+          >
+            <h2 id="switch-title">Switch practice?</h2>
+            {/* UX05: both names, in text. A reader who cannot see the marker
+                colours still gets the whole meaning. */}
+            <p id="switch-body">
+              You are switching from <strong>{active ? active.name : "Combined view"}</strong> to{" "}
+              <strong>{destination.name}</strong>. Records you open after this belong to{" "}
+              <strong>{destination.name}</strong>, and anything you send or issue will go out under
+              that practice&rsquo;s identity.
+            </p>
+            {hasUnsavedDraft ? (
+              <p className="banner banner--warning" style={{ marginTop: 16 }}>
+                <span aria-hidden="true">!</span>
+                <span>
+                  Unsaved work on this screen was prepared for{" "}
+                  <strong>{active ? active.name : "Combined view"}</strong> and will not be carried
+                  across.
+                </span>
+              </p>
+            ) : null}
+            <div className="dialog-actions">
+              <button type="button" className="btn" onClick={() => setPendingSwitch(null)}>
+                Stay in {active ? active.name : "Combined view"}
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => applySwitch(pendingSwitch)}
+              >
+                Switch to {destination.name}
+              </button>
+            </div>
           </div>
         </div>
-      )}
-    </div>
+      ) : null}
+    </>
   );
 }
 
@@ -139,31 +132,4 @@ export function assertPracticeChosen(activePracticeId: string): string {
     throw new Error("Choose a practice before creating, sending or issuing.");
   }
   return activePracticeId;
-}
-
-/** Loads the switcher's options from the scoped API. */
-export function usePractices() {
-  const [practices, setPractices] = useState<PracticeSummary[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/practices")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => {
-        if (!cancelled) setPractices(d.practices ?? []);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return { practices, error, loading };
 }

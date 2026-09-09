@@ -16,6 +16,7 @@ import { CsrfError } from "@/lib/csrf-shared";
 import { UnauthenticatedError } from "@/lib/session";
 import { AuthError, RateLimitError } from "@/lib/auth";
 import { LoginChallengeError } from "@/lib/login-challenge";
+import { PortalAuthError } from "@/lib/portal-auth";
 
 export function errorResponse(e: unknown): NextResponse {
   if (e instanceof UnauthenticatedError) {
@@ -25,6 +26,14 @@ export function errorResponse(e: unknown): NextResponse {
   // specific message (rate limited, locked, wrong code) without ever
   // distinguishing "unknown email" from "wrong password".
   if (e instanceof AuthError || e instanceof RateLimitError || e instanceof LoginChallengeError) {
+    return NextResponse.json({ error: e.message, code: e.code }, { status: e.status });
+  }
+  // POR02: the portal's refusals are already written to be safe for an
+  // unauthenticated reader — one message for every dead invitation, and 404
+  // (never 403) for an entity the contact may not reach. So the message is
+  // passed through as-is rather than being flattened here, which would lose
+  // the renewal instruction POR05 requires.
+  if (e instanceof PortalAuthError) {
     return NextResponse.json({ error: e.message, code: e.code }, { status: e.status });
   }
   if (e instanceof PracticeAccessError) {

@@ -757,6 +757,163 @@ To finish T16 next session:
   `dev.owner@example.invalid` / `Dev-Local-Test-Passphrase-9` and the code.
   `npm run dev:walk` proves every linked screen resolves without a browser.
 
+- 2026-09-10 — T13.1 — schema + migration `20260910000000_client_portal`:
+  `PortalInvitation`, `PortalSession`, `PortalUpload`, `PortalUploadPart`,
+  `PracticeSupportContact`, enum `PortalUploadState`. Deliberately does NOT
+  extend User/Session/Invitation — PRD §17 requires portal authentication to be
+  separate from staff administration, so a contact is its own principal and
+  authority still comes from `ContactAuthority`. Purely additive (checked: no
+  DROP, no ALTER on an existing column), written idempotently, applied clean.
+  `PortalUploadPart @@unique([uploadId, partNumber])` is what makes a resumed
+  transfer idempotent — the same part twice updates one row.
+  — migrate deploy applied; five tables verified present.
+
+- 2026-09-10 — T13.2 — `src/lib/portal-auth.ts` + `src/lib/portal-session.ts`.
+  Single-use enforced by a CONDITIONAL `updateMany` on `acceptedAt: null`, not
+  by the preceding read — two simultaneous redemptions of one link must not
+  both succeed. All four dead-invitation cases (unknown / expired / used /
+  revoked) throw ONE error with ONE message; the distinguishing reason goes to
+  the audit log, where staff can see it and a visitor cannot (POR02 "public
+  self registration cannot discover existing client accounts").
+  `assertPortalAccess` throws 404 and never 403, matching the staff API rule.
+  Authority is re-checked on EVERY request via `liveAuthorities`, and a session
+  whose grants have all been revoked is revoked server-side on next contact —
+  checking only at sign-in would leave a live window after a client says
+  someone has left. No dev-header bypass in the portal resolver.
+  `PortalAuthError` added to `errorResponse` so the renewal instruction POR05
+  requires survives to the client. — typecheck clean.
+
+- 2026-09-10 — T13.3 — `src/lib/portal.ts`: entity switcher list, portal
+  home read model, support contacts. POR01's prohibition ("do not expose
+  internal staff productivity, working papers or discussion") is enforced by
+  what each query SELECTS, not by filtering afterwards — an internal field
+  cannot reach a portal screen unless someone adds it to a select list here
+  first. The fields deliberately NOT selected are named in comments at each
+  query: SLA clocks and item ownerUserId (staff productivity),
+  internalTargetDate/reviewTargetDate on obligations (firm working deadlines,
+  not dates agreed with the client), acceptanceStatus/confidentiality on the
+  relationship (an internal judgement about the client, not theirs to read),
+  issuedSnapshot on invoices. Deliverables are double-guarded: released to THIS
+  contact AND not a working paper AND belonging to the entity being viewed, so
+  a release for the contact's other company cannot surface. The switcher is
+  built from the same liveAuthorities call that guards each request, so it can
+  never offer an entity the request path would refuse. — typecheck clean.
+
+- 2026-09-10 — T13.4 — `src/lib/portal-upload.ts` + `portalUploadPartKey` in
+  object-store.ts. POR03 resumable upload built against the THREE ways a real
+  client interrupts one, each with its own mechanism: (1) dropped connection →
+  `PortalUploadPart @@unique([uploadId, partNumber])`, so a retried part
+  updates one row; receivedBytes is RECOMPUTED from existing parts, never
+  incremented, because an increment would double-count the exact retry this
+  absorbs. (2) tab closed, upload id lost → `findResumable` matches on what a
+  client can honestly re-declare (contact + entity + item + filename + exact
+  size, plus digest when given) and hands back the upload in progress.
+  (3) full re-send later → content addressing; `completePortalUpload` finds the
+  digest already filed for the relationship and records
+  `deduplicatedFromVersionId` instead of creating a second original.
+  Completing twice returns the ORIGINAL receipt rather than filing again.
+  Each part is re-verified against its recorded digest at assembly, so a
+  substituted staging object cannot become a document carrying a clean hash.
+  DOC01 intake is NOT bypassed — the portal runs the same assess/scan/quarantine
+  path, and a refusal abandons the upload and tells the client nothing about
+  our scanning. Item moves to SUBMITTED, never ACCEPTED (POR03 separates
+  receipt from acceptance; COM02 close rule depends on that distinction), under
+  an API02 optimistic version check so a concurrent staff decision is not
+  silently overwritten.
+  `fileUpload` in documents.ts extended with a portal principal:
+  `actorUserId` is now `string | null` (all existing callers still typecheck)
+  and `assertFilingPrincipal` requires exactly one of staff/contact with no
+  default branch, so an anonymous filing has no path. `preparedByUserId` stays
+  null for a portal upload — a client contact is not a preparer of the firm's
+  work (DOC02). — typecheck clean.
+
+- 2026-09-10 — T13.5 — portal API routes: `/api/portal/{home,uploads,
+  uploads/[id],uploads/[id]/parts,uploads/[id]/complete,logout,
+  invitations/accept,invitations/renew}`, plus the STAFF-side
+  `/api/portal-invitations` (issue + revoke) kept deliberately outside the
+  `/api/portal/*` prefix, so a portal cookie can never be presented to an
+  invitation-issuing endpoint. Renewal returns 200 with an identical
+  acknowledgement for a token that never existed — a 404 there would be the
+  account-discovery oracle POR02 forbids. `?entity=` on home is a REQUEST,
+  falling back to an entity the contact does hold rather than switching
+  authority (same rule as NAV03 for staff deep links).
+  BUG FOUND AND FIXED BEFORE TESTING: portal session cookie was scoped
+  `path: "/portal"`, so it would never have been sent to `/api/portal/*` —
+  every portal API call would have 401ed. A cookie carries one path prefix and
+  the portal spans two, so the path is "/" and the separation from staff auth
+  is carried by the cookie NAME (`bhv_portal_session` vs `bhv_session`), which
+  is the part that actually does the work: neither resolver reads the other's
+  cookie. — typecheck clean.
+
+- 2026-09-10 — T13.6 — portal screens: `/portal` (home + entity switcher),
+  `/portal/upload/[itemId]` (guided by service + period), `/portal/sign-in/
+  [token]`, `/portal/help` (POR05 recovery + verified support route), plus a
+  portal-only layout and CSS block in globals.css. NOT the staff AppShell —
+  that shell IS the internal practice system POR01 says not to expose (its
+  menu comes from the permission engine and its switcher spans practices).
+  The sign-in page names no client, practice or contact: identity appears only
+  after redemption succeeds. Redemption is a POST from the client, never work
+  done during the GET render — a GET that signed you in would be triggered by
+  any link preview or scanner and would burn the single use doing it.
+  The renewal form asks for the dead LINK, not an email address: a link is
+  enough for staff to find the contact and identifies nobody, whereas an email
+  box on a public page is the account-discovery oracle POR02 forbids.
+  Uploader keeps the selected file mounted on error so a retry is free, and
+  resumes from the server's part list with no client-side state. Portal reuses
+  the staff .card/.btn/.field/.state/.status vocabulary rather than forking it
+  — same product, different audience, and one set of contrast pairs to keep
+  honest. Rows stack below 600px so a status pill plus Upload button cannot
+  push item text into a horizontal scroll on a phone (POR05).
+  Fixed while building: ClientRequest declares `engagementId` but no
+  `engagement` relation, so the service code is read in a second query (same
+  as portal.ts already does). — typecheck + eslint clean.
+
+- 2026-09-10 — T13.7 — `tests/t13-portal.ts` WRITTEN BUT NEVER RUN. Added
+  `npm run test:t13` and appended it to the `npm test` chain. It covers the
+  three PRD §17 evidence points plus single-use invitations, the POR01
+  exposure prohibition, revocation mid-session and POR05 verified-support
+  filtering, each headline paired with a CONTROL assertion (an entitled entity
+  still resolves; a genuine deliverable IS shown; a genuinely different file
+  IS filed as its own original) so none of them can pass with the mechanism
+  switched off. Needs MinIO up — it writes real objects.
+
+### T13 — RESUME HERE (session ended 2026-09-10, work paused mid-T13.7)
+
+T13 is `[~]`. T13.1-T13.6 are done, typecheck and eslint clean throughout.
+NOTHING in T13 has been executed yet — no test has run, no screen has been
+loaded in a browser. Treat every claim above as "written and typechecked",
+not "working".
+
+Next steps, in order:
+1. `docker compose up -d db redis minio` — T13 needs MinIO, like T11.
+2. `npm run test:t13` and fix what it finds. Expect real failures on first
+   contact; nothing here has been exercised.
+   Specific things most likely to be wrong, since they were never run:
+   - `pdfBytes()` in the test builds a synthetic PDF. `assessUpload` sniffs
+     content, so if it rejects the filler the whole EVIDENCE-3 section fails
+     at intake rather than at the thing being tested. Check the verdict first.
+   - `ObligationRule` is created with an explicit `id`; confirm that field is
+     writable and the required columns are all present.
+   - The `Obligation` fixture sets `status: "PENDING"` — confirm that value
+     exists in ObligationStatus.
+3. Then T13.8: full regression (`npm test`), TWO passes on this machine —
+   T02-T07 with the dev server up, T08-T13 with it stopped. Warm the dev
+   server before believing a T03/T06/T07 failure (cold-compile flakiness is
+   recorded above).
+4. Only then check T13's own box.
+
+Not yet done for T13, and not started:
+- No portal screen has been opened in a browser. `npm run dev:walk` does NOT
+  cover /portal — it signs in as STAFF, and the portal is a separate
+  authentication world by design. A portal equivalent needs writing, or the
+  screens need a manual pass.
+- No seed helper creates a portal contact, so there is no way to click through
+  the portal by hand yet. `scripts/seed-demo-data.ts` creates contacts but no
+  ContactAuthority grants and no PortalInvitation.
+- `PracticeSupportContact` has no admin UI; rows must be inserted by hand.
+- T13 deliberately does not touch POR04 (approvals) or POR06 (external
+  experts) — both R1.
+
 ---
 
 ## SESSION HANDOFF (2026-09-09)

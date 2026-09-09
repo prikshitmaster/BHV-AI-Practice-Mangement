@@ -197,6 +197,7 @@ model Practice {
   documentSets        DocumentSet[]
   retentionPolicies   RetentionPolicy[]
   legalHolds          LegalHold[]
+  supportContacts     PracticeSupportContact[]
 
   // IAM04: invoices above this value require independent review.
   invoiceApprovalThreshold Decimal @default(0) @db.Decimal(18, 2)
@@ -901,6 +902,10 @@ model Contact {
   authorities       ContactAuthority[]
   changeRequests    ContactChangeRequest[]
   releaseRecipients DocumentReleaseRecipient[]
+
+  portalInvitations PortalInvitation[]
+  portalSessions    PortalSession[]
+  portalUploads     PortalUpload[]
 }
 
 enum ChangeRequestStatus {
@@ -1031,6 +1036,7 @@ model ClientRelationship {
   documentIntakes    DocumentIntake[]
   invoices           Invoice[]
   receipts           Receipt[]
+  portalUploads      PortalUpload[]
 
   // The composite key every practice-scoped child FKs against.
   @@unique([id, practiceId])
@@ -2899,7 +2905,8 @@ model ClientRequestItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  responses ClientRequestItemResponse[]
+  responses     ClientRequestItemResponse[]
+  portalUploads PortalUpload[]
 
   @@unique([id, practiceId])
   @@unique([requestId, sequence])
@@ -3183,4 +3190,192 @@ model NotificationPreference {
 
   @@unique([practiceId, contactId])
   @@unique([practiceId, userId])
+}
+
+// ---------------------------------------------------------------------------
+// Client portal — POR01-03, POR05 (PRD §17), T13.
+//
+// PRD §17 closes with "Separate portal authentication from internal staff
+// administration." That is why none of these models touch `User`, `Session` or
+// `Invitation`: a client contact is not a staff member with fewer permissions,
+// it is a different kind of principal entirely. Authority to act still comes
+// from ContactAuthority — nothing here grants access on its own.
+// ---------------------------------------------------------------------------
+
+/// POR02 invitation. Distinct from `Invitation`, which carries a PracticeRole
+/// and creates a staff account; this one names an existing client CONTACT and
+/// grants nothing beyond what ContactAuthority already allows them to do.
+model PortalInvitation {
+  id         String  @id @default(uuid())
+  practiceId String
+  contactId  String
+  contact    Contact @relation(fields: [contactId], references: [id])
+
+  /// Only the SHA-256, as with staff sessions: a database or backup copy
+  /// cannot be replayed as a live invitation.
+  tokenHash String   @unique
+  expiresAt DateTime
+
+  invitedByUserId String?
+  invitedByName   String
+
+  /// POR02 "single use". Set at redemption, checked before every redemption,
+  /// never cleared — a used invitation stays used.
+  acceptedAt DateTime?
+
+  revokedAt     DateTime?
+  revokedReason String?
+
+  /// POR05 "clear recovery for expired links". A renewal is requested with the
+  /// dead token itself, which is what lets the request be routed to the right
+  /// engagement team WITHOUT the visitor having to name the client.
+  renewalRequestedAt DateTime?
+  renewalCount       Int       @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, contactId])
+  @@index([expiresAt])
+}
+
+/// Portal session. Deliberately mirrors `Session`'s shape (hash-only token,
+/// idle + absolute expiry, server-side revocation) but keys on Contact, and is
+/// carried in its own cookie so a portal token can never be presented as a
+/// staff token or the reverse.
+model PortalSession {
+  id         String  @id @default(uuid())
+  contactId  String
+  contact    Contact @relation(fields: [contactId], references: [id])
+  practiceId String
+
+  tokenHash String @unique
+
+  userAgent String?
+
+  createdAt         DateTime  @default(now())
+  lastSeenAt        DateTime  @default(now())
+  idleExpiresAt     DateTime
+  absoluteExpiresAt DateTime
+
+  revokedAt     DateTime?
+  revokedReason String?
+
+  uploads PortalUpload[]
+
+  @@index([contactId, revokedAt])
+  @@index([practiceId])
+}
+
+enum PortalUploadState {
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+/// POR03 resumable upload.
+///
+/// The acceptance evidence is "interrupted upload resumes without duplicate
+/// originals", so the resume identity has to be established BEFORE any bytes
+/// move, not inferred afterwards: the client declares total size and digest up
+/// front and gets back an upload id, and every part it sends names its own
+/// index. Re-sending a part it already sent overwrites that part rather than
+/// appending a second copy, and the assembled bytes are content-addressed on
+/// completion — so even a client that restarts from zero lands on the same
+/// object key and the same DocumentVersion.
+model PortalUpload {
+  id         String @id @default(uuid())
+  practiceId String
+
+  clientRelationshipId String
+  clientRelationship   ClientRelationship @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id])
+
+  sessionId String?
+  session   PortalSession? @relation(fields: [sessionId], references: [id])
+
+  /// The request item this satisfies. POR03 guides "by service and period",
+  /// which is exactly what the item already carries.
+  itemId String?
+  item   ClientRequestItem? @relation(fields: [itemId, practiceId], references: [id, practiceId])
+
+  filename         String
+  declaredMimeType String
+  expectedBytes    Int
+  /// Declared by the client at the start. Verified against the assembled bytes
+  /// at completion — a mismatch fails the upload rather than filing a
+  /// document nobody can vouch for.
+  expectedSha256 String?
+
+  receivedBytes Int               @default(0)
+  state         PortalUploadState @default(IN_PROGRESS)
+
+  /// Set once the parts have been assembled and accepted through DOC01 intake.
+  completedAt       DateTime?
+  intakeId          String?
+  documentVersionId String?
+  /// Records that completion found the identical content already filed for
+  /// this item — the "no duplicate original" outcome, kept visible rather than
+  /// silently succeeding.
+  deduplicatedFromVersionId String?
+
+  abandonedAt   DateTime?
+  abandonReason String?
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parts PortalUploadPart[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, contactId, state])
+  @@index([expiresAt])
+}
+
+/// One received chunk. `@@unique([uploadId, partNumber])` is what makes a
+/// resumed transfer idempotent: the same part arriving twice updates one row.
+model PortalUploadPart {
+  id       String       @id @default(uuid())
+  uploadId String
+  upload   PortalUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  partNumber Int
+  sizeBytes  Int
+  sha256     String
+  objectKey  String
+
+  receivedAt DateTime @default(now())
+
+  @@unique([uploadId, partNumber])
+  @@index([uploadId])
+}
+
+/// POR05 "call / message route using verified firm contact details configured
+/// by the owner". Owner-configured and explicitly verified — an unverified row
+/// is not shown to a client, because a support number nobody checked is worse
+/// than no number at all.
+model PracticeSupportContact {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  label      String
+  phone      String?
+  email      String?
+  helpUrl    String?
+  hoursLabel String?
+
+  verifiedAt DateTime?
+  verifiedBy String?
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime?
+  archivedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([practiceId, archivedAt])
 }

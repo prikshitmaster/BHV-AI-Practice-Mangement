@@ -102,6 +102,29 @@ export function quarantineObjectKey(documentNamespace: string, sha256: string): 
   return `${documentNamespace}/quarantine/${sha256}`;
 }
 
+/**
+ * POR03 resumable-upload staging (T13). A separate prefix from `documents/`
+ * and `quarantine/`, because a part is not a document: it has passed no DOC01
+ * check, it is not addressed by the content of anything whole, and no document
+ * route may be able to reach it by constructing a key. Parts are deleted once
+ * the upload is assembled, or expire with it.
+ */
+export function portalUploadPartKey(
+  documentNamespace: string,
+  uploadId: string,
+  partNumber: number,
+): string {
+  assertNamespace(documentNamespace);
+  if (!/^[0-9a-f-]{36}$/.test(uploadId)) {
+    throw new ObjectStoreError("Invalid upload id", "BAD_UPLOAD_ID");
+  }
+  if (!Number.isInteger(partNumber) || partNumber < 0 || partNumber > 100_000) {
+    throw new ObjectStoreError("Invalid part number", "BAD_PART_NUMBER");
+  }
+  // Zero-padded so a lexical listing is also the assembly order.
+  return `${documentNamespace}/portal-staging/${uploadId}/${String(partNumber).padStart(6, "0")}`;
+}
+
 function assertNamespace(ns: string) {
   if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(ns)) {
     throw new ObjectStoreError(`Invalid document namespace: ${ns}`, "BAD_NAMESPACE");

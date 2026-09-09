@@ -800,3 +800,203 @@ h3 {
     max-width: none;
   }
 }
+
+/* ===========================================================================
+   Client portal — POR01, POR03, POR05 (PRD §17), T13
+   ===========================================================================
+
+   POR05 requires mobile-responsive screens and readable file labels, and does
+   NOT permit demanding a desktop app. So the portal is a single column that
+   works from 320px up, sized in the same tokens as the staff UI rather than a
+   second scale — a client on a phone at 200% zoom is the design target here,
+   not an afterthought.
+
+   The portal deliberately reuses .card, .btn, .field, .state, .data-table and
+   .status from above. It is a different audience, not a different product, and
+   forking the vocabulary would mean two sets of contrast pairs to keep honest.
+   =========================================================================== */
+
+.portal {
+  min-height: 100vh;
+  background: var(--surface);
+}
+
+.portal-page {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space) * 4);
+  /* Readable measure on a large screen; full width below it. */
+  max-width: 900px;
+  margin: 0 auto;
+  padding: calc(var(--space) * 3) calc(var(--space) * 2) calc(var(--space) * 8);
+}
+
+.portal-page--narrow {
+  max-width: 640px;
+}
+
+.portal-page h1 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.portal-page h2 {
+  font-size: 1.15rem;
+  line-height: 1.3;
+  margin: 0 0 var(--space);
+}
+
+.portal-page section {
+  display: block;
+}
+
+.portal-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space);
+  padding-bottom: calc(var(--space) * 2);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+/* UX05 applied to the portal: the firm is named in TEXT, on every screen, so a
+   client acting for entities of both practices always knows which one they are
+   corresponding with. */
+.portal-firm {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.portal-entity-single {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text-secondary);
+}
+
+.portal-switcher {
+  max-width: 420px;
+}
+
+/* POR01's named primary action, given the weight the requirement asks for. */
+.portal-primary {
+  background: var(--accent-subtle-bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: calc(var(--space) * 2);
+}
+
+.portal-primary h2 {
+  margin-top: 0;
+}
+
+.portal-primary p {
+  margin: 0 0 calc(var(--space) * 1.5);
+}
+
+.portal-request + .portal-request {
+  margin-top: calc(var(--space) * 2);
+}
+
+.portal-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space);
+}
+
+.portal-items > li {
+  padding: calc(var(--space) * 1.5) 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.portal-items > li:first-child {
+  border-top: 0;
+}
+
+.portal-items p {
+  margin: 4px 0 0;
+}
+
+.portal-correction {
+  color: var(--danger);
+}
+
+.portal-contact-routes {
+  list-style: none;
+  margin: var(--space) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--space) * 2);
+}
+
+.portal-context {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: calc(var(--space) * 1.5);
+  margin: 0 0 calc(var(--space) * 2);
+  padding: calc(var(--space) * 2);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.portal-context dt {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.portal-context dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.portal-uploader {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space) * 2);
+}
+
+/* The file input is a primary control on a phone, so it gets the same 44px
+   touch target as every other control (UX03). */
+.portal-uploader input[type="file"] {
+  min-height: var(--touch-target);
+  padding: calc(var(--space) * 1.25);
+}
+
+.portal-progress progress {
+  width: 100%;
+  height: 12px;
+}
+
+.portal-footer {
+  padding-top: calc(var(--space) * 2);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Below this the row layouts must stack, or a status pill and an Upload button
+   push the item text into a horizontal scroll on a phone. */
+@media (max-width: 600px) {
+  .portal-items .row,
+  .portal-header .row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space);
+  }
+
+  .portal-items .spacer {
+    display: none;
+  }
+
+  .portal-page {
+    padding-left: var(--space);
+    padding-right: var(--space);
+  }
+}

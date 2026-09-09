@@ -408,12 +408,37 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
     three PRD evidence points + the safeguards.
   - [x] T12.9 — Run the acceptance test + full regression suite.
 
-- [ ] **T13 — Client portal.** Implement POR01-03, POR05 (PRD §17):
+- [~] **T13 — Client portal.** Implement POR01-03, POR05 (PRD §17):
   portal home, contact authority with entity switcher, guided upload.
   Defer POR04 (approvals) and POR06 (external experts) to R1.
   *Test: a group CFO switches between two approved client entities and
   cannot see a third; interrupted upload resumes without duplicate
   originals.*
+  - [x] T13.1 — Schema + migration: `PortalInvitation` (single use,
+    expiring, scoped to contact + practice), `PortalSession` (token hash
+    only, keyed on Contact NOT User — PRD §17 "separate portal
+    authentication from internal staff administration"), `PortalUpload`
+    (resumable: expected size + sha256, received bytes, parts).
+  - [x] T13.2 — `src/lib/portal-auth.ts`: issue/accept invitation, portal
+    session create + validate, `requirePortalContact()`. An unknown,
+    expired or already-used token returns ONE identical safe response
+    that never names a client (POR02 + acceptance evidence).
+  - [x] T13.3 — `src/lib/portal.ts`: authorised-entity list from live
+    `ContactAuthority`, and `loadPortalHome()` built on an explicit field
+    allowlist so working papers, internal threads and staff productivity
+    cannot cross (POR01).
+  - [x] T13.4 — Resumable upload (POR03): begin/append/complete keyed so a
+    resumed transfer reuses the same record and the same content-addressed
+    object key, producing no duplicate original. Receipt confirms intake
+    only, never correctness.
+  - [x] T13.5 — Portal API routes under `/api/portal/*`, all scoped to the
+    session contact's live authority for the named relationship.
+  - [x] T13.6 — Portal screens: home + entity switcher, guided upload,
+    invitation accept, expired-link recovery, support contact from
+    owner-configured firm details. Mobile responsive (POR05).
+  - [~] T13.7 — Acceptance test `tests/t13-portal.ts` covering the three
+    PRD evidence points + the isolation safeguards.
+  - [ ] T13.8 — Run the acceptance test + full regression suite.
 
 ## Phase 5 — Billing register (R0 subset)
 

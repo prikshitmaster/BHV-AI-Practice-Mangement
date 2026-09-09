@@ -57,7 +57,18 @@ export class DocumentError extends Error {
 // ===========================================================================
 
 export type FileUploadParams = {
-  actorUserId: string;
+  /**
+   * The staff member filing this. Null ONLY for a portal upload, which is made
+   * by a client contact and must then set `portalContact` instead — see
+   * assertFilingPrincipal below, which refuses a call that names neither.
+   */
+  actorUserId: string | null;
+  /**
+   * POR03 (T13). A client contact is not a staff user with fewer permissions,
+   * so it does not get `document.upload`; its authority is the live
+   * ContactAuthority already checked by document intake for this relationship.
+   */
+  portalContact?: { contactId: string; clientRelationshipId: string } | null;
   practiceId: string;
   receipt: IntakeReceipt;
   filename: string;
@@ -94,7 +105,7 @@ export async function fileUpload(params: FileUploadParams) {
     );
   }
 
-  await assertCan(params.actorUserId, params.practiceId, "document.upload");
+  await assertFilingPrincipal(params);
 
   const document = params.documentId
     ? await requireDocument(params.practiceId, params.documentId)
@@ -135,11 +146,14 @@ export async function fileUpload(params: FileUploadParams) {
         mimeType: receipt.detectedMimeType ?? "application/octet-stream",
         declaredMimeType: receipt.detectedMimeType,
         sizeBytes: BigInt(receipt.sizeBytes),
-        source: "STAFF_UPLOAD",
+        source: params.portalContact ? "PORTAL_UPLOAD" : "STAFF_UPLOAD",
         scanVerdict: "CLEAN",
         filename: params.filename,
         status: "DRAFT",
         derivation: "ORIGINAL",
+        // DOC02 "capture preparer": a client contact is not a preparer of the
+        // firm's work, so this stays null for a portal upload. Who sent it is
+        // recorded on the DocumentIntake row and in the audit event.
         preparedByUserId: params.actorUserId,
       },
     });
@@ -163,10 +177,49 @@ export async function fileUpload(params: FileUploadParams) {
       filename: params.filename,
       sha256: receipt.sha256,
       versionNo: version.versionNo,
+      // Named explicitly so the trail says WHO filed it even when there is no
+      // staff actor to attribute it to.
+      uploadedByContactId: params.portalContact?.contactId ?? null,
+      source: params.portalContact ? "PORTAL_UPLOAD" : "STAFF_UPLOAD",
     },
   });
 
   return { document, version };
+}
+
+/**
+ * Exactly one principal, always checked.
+ *
+ * Written as a single function with no default branch so a future third kind of
+ * uploader cannot slip through by leaving both fields unset — that would be an
+ * anonymous filing, which DOC01 does not have a path for.
+ */
+async function assertFilingPrincipal(params: FileUploadParams) {
+  if (params.actorUserId && params.portalContact) {
+    throw new DocumentError(
+      "A filing has one principal: a staff user or a portal contact, never both",
+      "AMBIGUOUS_PRINCIPAL",
+      400,
+    );
+  }
+
+  if (params.actorUserId) {
+    await assertCan(params.actorUserId, params.practiceId, "document.upload");
+    return;
+  }
+
+  if (params.portalContact) {
+    // The relationship the contact holds authority for is the ONLY one they may
+    // file against — a portal upload cannot name a different client on the way
+    // in. `receiveUpload` has already checked the authority itself; this checks
+    // that the filing has not drifted to another relationship since.
+    if (params.clientRelationshipId !== params.portalContact.clientRelationshipId) {
+      throw new DocumentError("Not found", "PORTAL_RELATIONSHIP_MISMATCH", 404);
+    }
+    return;
+  }
+
+  throw new DocumentError("A filing must name its principal", "UNAUTHENTICATED_FILING", 401);
 }
 
 async function findByFilename(params: FileUploadParams) {

@@ -1,0 +1,1218 @@
+// BHV Practice Management — core data model (T02, PRD §33 DAT01-03).
+//
+// Three rules shape everything below:
+//
+// DAT01  Every financial/professional record carries a non-null practiceId,
+//        and every cross-record reference is a COMPOSITE foreign key that
+//        includes practiceId. Postgres therefore rejects a reference that
+//        crosses practices — the app cannot leak by forgetting a filter.
+//        Money is Decimal(18,2) with an explicit currency; statutory dates
+//        are date-only; instants are UTC timestamptz, interpreted against
+//        Practice.jurisdictionTimeZone.
+// DAT02  History is never rewritten. Issued invoices and accepted
+//        engagements freeze their particulars into a snapshot; approvals
+//        keep the actor's name; roles/registrations/rules carry effective
+//        intervals rather than being edited in place.
+// DAT03  Ordinary removal sets archivedAt (reversible). Destructive purge
+//        is a separate retention-controlled process, not modelled here.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Practice / membership
+// ---------------------------------------------------------------------------
+
+enum PracticeConstitution {
+  PROPRIETORSHIP
+  PARTNERSHIP
+  LLP
+}
+
+enum RegistrationKind {
+  FRN
+  PAN
+  TAN
+  GSTIN
+}
+
+// IAM02. Note the deliberate split at the bottom: IT_ADMIN is an
+// infrastructure role and carries NO professional data authority, while
+// QUALITY_REVIEWER carries professional authority and no infrastructure
+// rights. Conflating the two is how an IT account ends up able to sign a
+// filing.
+enum PracticeRole {
+  GROUP_OWNER
+  PRACTICE_PARTNER
+  MANAGER
+  REVIEWER
+  STAFF_ARTICLE
+  FINANCE
+  HR
+  IT_ADMIN
+  QUALITY_REVIEWER
+  CLIENT_CONTACT
+}
+
+// IAM03: how far a membership's authority reaches.
+enum AssignmentScope {
+  OWN_WORK
+  ASSIGNED_ENGAGEMENTS
+  TEAM
+  BRANCH
+  PRACTICE
+  COMBINED
+}
+
+// IAM03: areas that stay denied even to senior roles unless an explicit
+// additional permission exists.
+enum RestrictedPermission {
+  HR_RECORDS
+  CREDENTIALS
+  FEE_RATES
+  PROTECTED_WORKPAPERS
+  CREDENTIAL_EXPORT
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+model Tenant {
+  id        String    @id @default(uuid())
+  name      String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  archivedAt DateTime?
+
+  practiceGroups PracticeGroup[]
+  practices      Practice[]
+  parties        Party[]
+  events         Event[]
+}
+
+// ORG01: BHV initially uses one group with two practices. The group exists
+// so a combined view is an explicit permission, never an automatic
+// consequence of two practices sharing a tenant.
+model PracticeGroup {
+  id       String @id @default(uuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+  name     String
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  practices Practice[]
+
+  @@unique([tenantId, name])
+}
+
+model Practice {
+  id              String               @id @default(uuid())
+  tenantId        String
+  tenant          Tenant               @relation(fields: [tenantId], references: [id])
+  practiceGroupId String?
+  practiceGroup   PracticeGroup?       @relation(fields: [practiceGroupId], references: [id])
+  name            String
+  constitution    PracticeConstitution
+
+  // ORG02: registered display name may differ from the internal name, and
+  // the identifier holder is a verified fact — never assumed. Left null
+  // until onboarding confirms it (see PROGRESS.md open questions).
+  registeredDisplayName String?
+  identifierHolderName  String?
+  identifierHolderVerifiedAt DateTime?
+
+  // ORG04: document namespace is independent per practice — object keys are
+  // prefixed with it so two practices cannot collide or enumerate each other.
+  documentNamespace String @unique
+
+  // ORG01 edge case: a deactivated practice stays READ ONLY under retention
+  // and legal hold rules rather than disappearing.
+  readOnlyFrom DateTime?
+
+  // DAT01: instants are UTC; this is the timezone statutory dates and
+  // business-day maths are interpreted in for this practice.
+  jurisdictionTimeZone String @default("Asia/Kolkata")
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  archivedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  registrations       PracticeRegistration[]
+  addresses           PracticeAddress[]
+  bankAccounts        PracticeBankAccount[]
+  letterheads         PracticeLetterhead[]
+  signatories         AuthorisedSignatory[]
+  sharesGranted       CrossPracticeShare[]  @relation("SharingPractice")
+  sharesReceived      CrossPracticeShare[]  @relation("ReceivingPractice")
+  branches            Branch[]
+  teams               Team[]
+  memberships         PracticeMembership[]
+  clientRelationships ClientRelationship[]
+  engagements         Engagement[]
+  jobs                Job[]
+  tasks               Task[]
+  obligations         Obligation[]
+  documents           Document[]
+  invoiceSeries       InvoiceSeries[]
+  invoices            Invoice[]
+  receipts            Receipt[]
+  allocations         ReceiptAllocation[]
+  approvals           Approval[]
+  selfReviewExceptions SelfReviewException[]
+  events              Event[]
+
+  // IAM04: invoices above this value require independent review.
+  invoiceApprovalThreshold Decimal @default(0) @db.Decimal(18, 2)
+
+  @@unique([tenantId, name])
+}
+
+// DAT02: identifiers are held as effective intervals. Superseding a GSTIN
+// adds a row; it never edits the value an old invoice was issued under.
+model PracticeRegistration {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  kind      RegistrationKind
+  value     String
+  stateCode String?
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  verifiedAt    DateTime?
+  verifiedBy    String?
+  archivedAt    DateTime?
+
+  invoiceSeries InvoiceSeries[]
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, kind, value, effectiveFrom])
+}
+
+// ORG02: verified configuration with effective dates. Every one of these is
+// a fact to be CONFIRMED at onboarding, not assumed — and superseding one
+// adds a row so old signed artefacts keep the values they were issued under
+// (ORG01 edge case: "a practice rename preserves old signed artefacts").
+
+model PracticeAddress {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  label      String
+  line1      String
+  line2      String?
+  city       String
+  state      String
+  postalCode String
+  country    String  @default("IN")
+
+  isRegisteredOffice Boolean @default(false)
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  verifiedAt    DateTime?
+  verifiedBy    String?
+  archivedAt    DateTime?
+
+  @@unique([id, practiceId])
+  @@index([practiceId, effectiveFrom])
+}
+
+// ORG04: bank mappings are independent per practice. An invoice issued by
+// one practice must never quote the other's account.
+model PracticeBankAccount {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  label         String
+  bankName      String
+  // Stored for display on invoices/letters. Real values are entered at
+  // onboarding — no real account numbers belong in this repo.
+  accountNumber String
+  ifsc          String
+  branchName    String?
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  verifiedAt    DateTime?
+  verifiedBy    String?
+  archivedAt    DateTime?
+
+  @@unique([id, practiceId])
+  @@index([practiceId, effectiveFrom])
+}
+
+model PracticeLetterhead {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  label           String
+  storageObjectId String?
+  headerHtml      String?
+  footerHtml      String?
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  archivedAt    DateTime?
+
+  @@unique([id, practiceId])
+  @@index([practiceId, effectiveFrom])
+}
+
+// ORG01 edge case: "a partnership change does not overwrite earlier
+// signatory facts" — hence intervals, never in-place edits.
+model AuthorisedSignatory {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  personName     String
+  designation    String
+  membershipNo   String?
+  userId         String?
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  verifiedAt    DateTime?
+  verifiedBy    String?
+  archivedAt    DateTime?
+
+  @@unique([id, practiceId])
+  @@index([practiceId, effectiveFrom])
+}
+
+enum ShareSubjectType {
+  DOCUMENT_VERSION
+  CONTACT_FIELD
+}
+
+// ORG05: cross-practice access exists ONLY as an explicit logged grant
+// naming the receiving practice, the purpose and an expiry. A grant is
+// pinned to one exact subject version — a new document version does not
+// inherit it. Revocation stops future access; it cannot retract copies
+// already downloaded, which is recorded rather than pretended otherwise.
+model CrossPracticeShare {
+  id String @id @default(uuid())
+
+  sharingPracticeId   String
+  sharingPractice     Practice @relation("SharingPractice", fields: [sharingPracticeId], references: [id])
+  receivingPracticeId String
+  receivingPractice   Practice @relation("ReceivingPractice", fields: [receivingPracticeId], references: [id])
+
+  subjectType    ShareSubjectType
+  subjectId      String
+  subjectVersion Int?
+
+  purpose   String
+  expiresAt DateTime
+
+  grantedByUserId String?
+  grantedByName   String
+  grantedAt       DateTime  @default(now())
+  revokedAt       DateTime?
+  revokedByName   String?
+
+  lastAccessedAt DateTime?
+  accessCount    Int      @default(0)
+
+  @@index([receivingPracticeId, expiresAt])
+  @@index([subjectType, subjectId])
+}
+
+model Branch {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+  name       String
+  archivedAt DateTime?
+
+  memberships PracticeMembership[]
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, name])
+}
+
+model Team {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+  name       String
+  archivedAt DateTime?
+
+  memberships PracticeMembership[]
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, name])
+}
+
+// A person. Deliberately holds NO authentication secrets — credentials and
+// MFA material arrive in T05 in a separate table, so that purging an account
+// leaves this identity row intact for historical approvals (DAT03 evidence).
+model User {
+  id       String     @id @default(uuid())
+  email    String     @unique
+  fullName String
+  status   UserStatus @default(INVITED)
+
+  // IAM05 lifecycle. Authorship and historical activity survive closure —
+  // only the ability to act is withdrawn.
+  invitedByUserId    String?
+  sponsorUserId      String?
+  invitedAt          DateTime?
+  acceptedAt         DateTime?
+  mfaEnrolledAt      DateTime?
+  lastAccessReviewAt DateTime?
+  suspendedAt        DateTime?
+  suspendedReason    String?
+
+  deactivatedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  memberships PracticeMembership[]
+  sessions    Session[]
+  queuedJobs  QueuedJob[]
+  events      Event[]
+}
+
+// IAM03: an explicit, reasoned, expiring grant over a restricted area.
+// Absence of a row means denied — there is no implicit seniority override.
+model PermissionGrant {
+  id           String             @id @default(uuid())
+  practiceId   String
+  membershipId String
+  membership   PracticeMembership @relation(fields: [membershipId, practiceId], references: [id, practiceId])
+
+  permission RestrictedPermission
+  reason     String
+
+  grantedByUserId String?
+  grantedByName   String
+  effectiveFrom   DateTime  @default(now())
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+
+  @@unique([membershipId, permission, effectiveFrom])
+  @@index([practiceId, permission])
+}
+
+// IAM05: revocation must have something concrete to invalidate. Real session
+// issuance (MFA, 30 min idle / 12 hr max) is AUTH02 in T05; the row exists
+// now so revoke-on-suspend can be built and tested.
+model Session {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  createdAt     DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  idleExpiresAt DateTime
+  absoluteExpiresAt DateTime
+  mfaVerifiedAt DateTime?
+
+  revokedAt     DateTime?
+  revokedReason String?
+
+  @@index([userId, revokedAt])
+}
+
+enum QueuedJobState {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+// IAM05/IAM01: a queued export outlives the session that requested it, so it
+// is both cancellable on revocation AND re-checked by the worker at execution
+// time. Either defence alone leaks: cancelling races with a job already
+// running, and re-checking alone leaves a revoked user's export sitting in the
+// queue.
+model QueuedJob {
+  id         String  @id @default(uuid())
+  practiceId String
+
+  requestedByUserId String
+  requestedBy       User   @relation(fields: [requestedByUserId], references: [id])
+
+  kind    String
+  payload Json
+  state   QueuedJobState @default(QUEUED)
+
+  cancelledReason String?
+  failureReason   String?
+
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  @@index([state, createdAt])
+  @@index([requestedByUserId, state])
+}
+
+// IAM04: the disclosed exception for a genuine sole-reviewer situation. It is
+// recorded, not silent, and always leaves a quality-review obligation behind.
+// Legal prohibitions cannot be overridden this way.
+model SelfReviewException {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  subjectType    ApprovalSubjectType
+  subjectId      String
+  subjectVersion Int
+
+  reason            String
+  disclosedByUserId String?
+  disclosedByName   String
+
+  qualityReviewRequired Boolean   @default(true)
+  qualityReviewedAt     DateTime?
+  qualityReviewedByName String?
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, subjectType, subjectId])
+}
+
+// DAT02: role assignment is an interval, not a mutable field.
+model PracticeMembership {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+
+  role            PracticeRole
+  assignmentScope AssignmentScope @default(OWN_WORK)
+  branchId String?
+  branch   Branch?      @relation(fields: [branchId, practiceId], references: [id, practiceId])
+  teamId   String?
+  team     Team?        @relation(fields: [teamId, practiceId], references: [id, practiceId])
+
+  permissionGrants PermissionGrant[]
+
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  grantExpiresAt DateTime?
+  revokedAt      DateTime?
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, userId, role, effectiveFrom])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Party / client relationship
+// ---------------------------------------------------------------------------
+
+enum PartyType {
+  INDIVIDUAL
+  HUF
+  PARTNERSHIP
+  LLP
+  COMPANY
+  TRUST
+  AOP_BOI
+  SOCIETY
+  GOVERNMENT
+}
+
+enum IdentifierKind {
+  PAN
+  GSTIN
+  CIN
+  LLPIN
+  TAN
+  DIN
+  AADHAAR_LAST4
+}
+
+enum AcceptanceStatus {
+  PROSPECT
+  ACCEPTED
+  DECLINED
+  TERMINATED
+}
+
+enum ConfidentialityClass {
+  NORMAL
+  RESTRICTED
+  HIGHLY_RESTRICTED
+}
+
+enum ContactAuthorityLevel {
+  VIEW_ONLY
+  UPLOAD
+  APPROVE
+  SIGNATORY
+}
+
+// The legal person. Held at tenant level: the same company may be a client
+// of both practices, but each practice's RELATIONSHIP with it is separate.
+model Party {
+  id        String    @id @default(uuid())
+  tenantId  String
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  legalName String
+  type      PartyType
+  archivedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  identifiers   PartyIdentifier[]
+  contacts      Contact[]
+  relationships ClientRelationship[]
+
+  @@index([tenantId, legalName])
+}
+
+model PartyIdentifier {
+  id      String         @id @default(uuid())
+  partyId String
+  party   Party          @relation(fields: [partyId], references: [id])
+  kind    IdentifierKind
+  value   String
+
+  verifiedAt    DateTime?
+  verifiedBy    String?
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  archivedAt    DateTime?
+
+  @@unique([partyId, kind, value, effectiveFrom])
+}
+
+model Contact {
+  id       String  @id @default(uuid())
+  partyId  String
+  party    Party   @relation(fields: [partyId], references: [id])
+  fullName String
+  email    String?
+  phone    String?
+  archivedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  authorities ContactAuthority[]
+}
+
+// One practice's relationship with one party. This is the record every
+// practice-scoped professional artefact hangs off.
+model ClientRelationship {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+  partyId    String
+  party      Party    @relation(fields: [partyId], references: [id])
+
+  acceptanceStatus AcceptanceStatus     @default(PROSPECT)
+  confidentiality  ConfidentialityClass @default(NORMAL)
+  acceptedAt       DateTime?
+  terminatedAt     DateTime?
+  archivedAt       DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  contactAuthorities ContactAuthority[]
+  engagements        Engagement[]
+  obligations        Obligation[]
+  documents          Document[]
+  invoices           Invoice[]
+  receipts           Receipt[]
+
+  // The composite key every practice-scoped child FKs against.
+  @@unique([id, practiceId])
+  @@unique([practiceId, partyId])
+}
+
+// DAT02: authority is an interval — revoking does not erase that the contact
+// once held it when an old approval was given.
+model ContactAuthority {
+  id                   String             @id @default(uuid())
+  practiceId           String
+  contactId            String
+  contact              Contact            @relation(fields: [contactId], references: [id])
+  clientRelationshipId String
+  clientRelationship   ClientRelationship @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+
+  authority     ContactAuthorityLevel
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  revokedAt     DateTime?
+
+  @@unique([clientRelationshipId, contactId, authority, effectiveFrom])
+  @@index([practiceId])
+}
+
+// ---------------------------------------------------------------------------
+// Engagement / job / task
+// ---------------------------------------------------------------------------
+
+enum EngagementState {
+  DRAFT
+  PENDING_ACCEPTANCE
+  ACCEPTED
+  ACTIVE
+  CLOSED
+  TERMINATED
+}
+
+enum JobState {
+  NOT_STARTED
+  IN_PROGRESS
+  BLOCKED
+  IN_REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskState {
+  NOT_STARTED
+  IN_PROGRESS
+  BLOCKED
+  IN_REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+model Engagement {
+  id                   String             @id @default(uuid())
+  practiceId           String
+  practice             Practice           @relation(fields: [practiceId], references: [id])
+  clientRelationshipId String
+  clientRelationship   ClientRelationship @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+
+  serviceCode     String
+  templateVersion String
+  periodStart     DateTime @db.Date
+  periodEnd       DateTime @db.Date
+
+  ownerUserId    String?
+  reviewerUserId String?
+  state          EngagementState @default(DRAFT)
+
+  // API02 optimistic concurrency — bumped on every mutation.
+  version Int @default(0)
+
+  // DAT02: particulars frozen at acceptance. Later master-data edits do not
+  // rewrite what was accepted.
+  acceptedSnapshot Json?
+  acceptedAt       DateTime?
+
+  closedAt   DateTime?
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  jobs        Job[]
+  obligations Obligation[]
+  documents   Document[]
+  invoices    Invoice[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, state])
+}
+
+model Job {
+  id           String     @id @default(uuid())
+  practiceId   String
+  practice     Practice   @relation(fields: [practiceId], references: [id])
+  engagementId String
+  engagement   Engagement @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+
+  title    String
+  periodKey String
+
+  // WRK02 recurrence: running the generator twice must not double-create.
+  dedupKey String
+
+  state   JobState @default(NOT_STARTED)
+  version Int      @default(0)
+
+  ownerUserId    String?
+  reviewerUserId String?
+  dueDate        DateTime? @db.Date
+
+  completedAt DateTime?
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tasks Task[]
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, dedupKey])
+  @@index([practiceId, state])
+}
+
+model Task {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+  jobId      String
+  job        Job      @relation(fields: [jobId, practiceId], references: [id, practiceId])
+
+  title       String
+  state       TaskState @default(NOT_STARTED)
+  version     Int       @default(0)
+  assigneeUserId String?
+  dueDate     DateTime? @db.Date
+
+  completedAt DateTime?
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  checklistItems ChecklistItem[]
+  blockedBy      TaskDependency[] @relation("BlockedTask")
+  blocks         TaskDependency[] @relation("BlockingTask")
+
+  @@unique([id, practiceId])
+  @@index([practiceId, state])
+}
+
+model ChecklistItem {
+  id         String   @id @default(uuid())
+  practiceId String
+  taskId     String
+  task       Task     @relation(fields: [taskId, practiceId], references: [id, practiceId])
+
+  label       String
+  isComplete  Boolean  @default(false)
+  completedAt DateTime?
+  sortOrder   Int      @default(0)
+
+  @@index([practiceId])
+}
+
+model TaskDependency {
+  id         String @id @default(uuid())
+  practiceId String
+
+  taskId String
+  task   Task   @relation("BlockedTask", fields: [taskId, practiceId], references: [id, practiceId])
+
+  dependsOnTaskId String
+  dependsOnTask   Task   @relation("BlockingTask", fields: [dependsOnTaskId, practiceId], references: [id, practiceId])
+
+  @@unique([taskId, dependsOnTaskId])
+  @@index([practiceId])
+}
+
+// ---------------------------------------------------------------------------
+// Obligation / rule
+// ---------------------------------------------------------------------------
+
+enum ObligationStatus {
+  REVIEW_REQUIRED
+  OPEN
+  IN_PROGRESS
+  FILED
+  NOT_APPLICABLE
+  CANCELLED
+}
+
+// Tenant-wide statutory rule, versioned. DAT02: a new statutory position is
+// a new version, never an edit of the version old work was done under.
+model ObligationRule {
+  id      String @id @default(uuid())
+  code    String
+  version Int
+  source  String
+
+  // Taxpayer-class criteria an extension or applicability test matches on.
+  applicability Json
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  archivedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  obligations Obligation[]
+
+  @@unique([code, version])
+}
+
+model Obligation {
+  id                   String             @id @default(uuid())
+  practiceId           String
+  practice             Practice           @relation(fields: [practiceId], references: [id])
+  clientRelationshipId String
+  clientRelationship   ClientRelationship @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+  engagementId         String?
+  engagement           Engagement?        @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+
+  ruleId      String
+  rule        ObligationRule @relation(fields: [ruleId], references: [id])
+  ruleVersion Int
+  periodKey   String
+
+  // DAT01: statutory dates are date-only values, not instants.
+  originalStatutoryDate DateTime  @db.Date
+  currentStatutoryDate  DateTime  @db.Date
+  internalTargetDate    DateTime? @db.Date
+
+  // DUE04: an obligation whose category cannot be determined stays here
+  // rather than silently defaulting to a date.
+  status  ObligationStatus @default(REVIEW_REQUIRED)
+  version Int              @default(0)
+
+  filedAt    DateTime?
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  changes ObligationChange[]
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, clientRelationshipId, ruleId, periodKey])
+  @@index([practiceId, currentStatutoryDate])
+}
+
+model ObligationChange {
+  id           String     @id @default(uuid())
+  obligationId String
+  obligation   Obligation @relation(fields: [obligationId], references: [id])
+
+  changedByUserId   String?
+  changedByName     String
+  reason            String
+  beforeMeta        Json
+  afterMeta         Json
+  approvedByUserId  String?
+  createdAt         DateTime @default(now())
+
+  @@index([obligationId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Document / version
+// ---------------------------------------------------------------------------
+
+enum DocumentSource {
+  STAFF_UPLOAD
+  PORTAL_UPLOAD
+  EMAIL_INTAKE
+  SCAN
+  SYSTEM_GENERATED
+}
+
+enum ScanVerdict {
+  PENDING
+  CLEAN
+  INFECTED
+  UNSUPPORTED_TYPE
+}
+
+model Document {
+  id                   String              @id @default(uuid())
+  practiceId           String
+  practice             Practice            @relation(fields: [practiceId], references: [id])
+  clientRelationshipId String?
+  clientRelationship   ClientRelationship? @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+  engagementId         String?
+  engagement           Engagement?         @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+
+  title          String
+  classification ConfidentialityClass @default(NORMAL)
+
+  retentionUntil DateTime? @db.Date
+  legalHold      Boolean   @default(false)
+  archivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  versions DocumentVersion[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, classification])
+}
+
+// DAT02: originals are immutable. A re-upload of the same filename creates
+// version n+1; it never overwrites version n.
+model DocumentVersion {
+  id         String   @id @default(uuid())
+  practiceId String
+  documentId String
+  document   Document @relation(fields: [documentId, practiceId], references: [id, practiceId])
+
+  versionNo       Int
+  storageObjectId String
+  sha256          String
+  mimeType        String
+  sizeBytes       BigInt
+  source          DocumentSource
+  scanVerdict     ScanVerdict    @default(PENDING)
+
+  preparedByUserId String?
+  reviewedByUserId String?
+  createdAt        DateTime @default(now())
+
+  releaseGrants DocumentReleaseGrant[]
+
+  @@unique([id, practiceId])
+  @@unique([documentId, versionNo])
+  @@index([practiceId, sha256])
+}
+
+model DocumentReleaseGrant {
+  id                String          @id @default(uuid())
+  practiceId        String
+  documentVersionId String
+  documentVersion   DocumentVersion @relation(fields: [documentVersionId, practiceId], references: [id, practiceId])
+
+  grantedToContactId String?
+  grantedToUserId    String?
+  grantedByUserId    String?
+
+  expiresAt DateTime?
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([practiceId, expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// Invoice / receipt
+// ---------------------------------------------------------------------------
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  CANCELLED
+}
+
+enum AllocationKind {
+  PAYMENT
+  TDS
+  WRITE_OFF
+  ADVANCE
+}
+
+// FIN02: each practice owns its own series. Two practices may both issue
+// number 1 — they are different series, so there is no collision.
+model InvoiceSeries {
+  id             String                @id @default(uuid())
+  practiceId     String
+  practice       Practice              @relation(fields: [practiceId], references: [id])
+  registrationId String?
+  registration   PracticeRegistration? @relation(fields: [registrationId, practiceId], references: [id, practiceId])
+
+  code         String
+  fiscalPeriod String
+  nextNumber   Int      @default(1)
+  lockedAt     DateTime?
+  archivedAt   DateTime?
+
+  invoices Invoice[]
+
+  @@unique([id, practiceId])
+  @@unique([practiceId, code, fiscalPeriod])
+}
+
+model Invoice {
+  id                   String             @id @default(uuid())
+  practiceId           String
+  practice             Practice           @relation(fields: [practiceId], references: [id])
+  seriesId             String
+  series               InvoiceSeries      @relation(fields: [seriesId, practiceId], references: [id, practiceId])
+  clientRelationshipId String
+  clientRelationship   ClientRelationship @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+  engagementId         String?
+  engagement           Engagement?        @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+
+  sequenceNumber Int
+  currency       String        @default("INR") @db.Char(3)
+  taxRuleVersion String?
+  status         InvoiceStatus @default(DRAFT)
+
+  subtotal Decimal @default(0) @db.Decimal(18, 2)
+  taxTotal Decimal @default(0) @db.Decimal(18, 2)
+  total    Decimal @default(0) @db.Decimal(18, 2)
+
+  // DAT02: written once at issue and never updated. Holds the client legal
+  // name, contact, addresses, registration numbers and line particulars as
+  // they stood at that instant — so renaming a contact later cannot alter
+  // an invoice that has already gone out.
+  issuedSnapshot Json?
+  issuedAt       DateTime?
+  cancelledAt    DateTime?
+
+  version   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines       InvoiceLine[]
+  allocations ReceiptAllocation[]
+
+  @@unique([id, practiceId])
+  @@unique([seriesId, sequenceNumber])
+  @@index([practiceId, status])
+}
+
+model InvoiceLine {
+  id         String  @id @default(uuid())
+  practiceId String
+  invoiceId  String
+  invoice    Invoice @relation(fields: [invoiceId, practiceId], references: [id, practiceId])
+
+  description    String
+  quantity       Decimal @db.Decimal(18, 4)
+  unitAmount     Decimal @db.Decimal(18, 2)
+  taxRatePercent Decimal @default(0) @db.Decimal(5, 2)
+  lineTotal      Decimal @db.Decimal(18, 2)
+  sortOrder      Int     @default(0)
+
+  @@index([practiceId])
+}
+
+model Receipt {
+  id                   String             @id @default(uuid())
+  practiceId           String
+  practice             Practice           @relation(fields: [practiceId], references: [id])
+  clientRelationshipId String
+  clientRelationship   ClientRelationship @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+
+  amount     Decimal  @db.Decimal(18, 2)
+  currency   String   @default("INR") @db.Char(3)
+  receivedAt DateTime
+  method     String
+  reference  String?
+
+  archivedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  allocations ReceiptAllocation[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, receivedAt])
+}
+
+// FIN04: a part payment and a TDS deduction against the same invoice are
+// distinct allocation rows, not one netted figure.
+model ReceiptAllocation {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+  receiptId  String
+  receipt    Receipt  @relation(fields: [receiptId, practiceId], references: [id, practiceId])
+  invoiceId  String
+  invoice    Invoice  @relation(fields: [invoiceId, practiceId], references: [id, practiceId])
+
+  kind      AllocationKind
+  amount    Decimal        @db.Decimal(18, 2)
+  createdAt DateTime       @default(now())
+
+  @@index([practiceId, invoiceId])
+}
+
+// ---------------------------------------------------------------------------
+// Approval / filing
+// ---------------------------------------------------------------------------
+
+enum ApprovalSubjectType {
+  ENGAGEMENT
+  INVOICE
+  DOCUMENT_VERSION
+  OBLIGATION
+  FILING
+}
+
+enum ApprovalDecision {
+  APPROVED
+  REJECTED
+  WITHDRAWN
+}
+
+// API02: an approval names the EXACT subject version it was given against,
+// so approving a stale version can be detected and refused.
+model Approval {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  subjectType    ApprovalSubjectType
+  subjectId      String
+  subjectVersion Int
+
+  actorUserId String?
+  // DAT03 evidence: the name is denormalised so a purged account still
+  // leaves an identifiable historical approval, without keeping secrets.
+  actorDisplayName String
+  authority        String
+
+  decision  ApprovalDecision
+  decidedAt DateTime         @default(now())
+  comments  String?
+
+  sourceFileSha256  String?
+  externalReference String?
+  acknowledgedAt    DateTime?
+
+  @@unique([practiceId, subjectType, subjectId, subjectVersion, decidedAt])
+  @@index([practiceId, subjectType, subjectId])
+}
+
+// ---------------------------------------------------------------------------
+// Event / integration / AI job
+// ---------------------------------------------------------------------------
+
+enum EventResult {
+  SUCCESS
+  FAILURE
+}
+
+// SEC03 append-only audit trail. Rows are inserted, never updated or deleted.
+model Event {
+  id         String    @id @default(uuid())
+  tenantId   String?
+  tenant     Tenant?   @relation(fields: [tenantId], references: [id])
+  practiceId String?
+  practice   Practice? @relation(fields: [practiceId], references: [id])
+
+  actorUserId          String?
+  actorUser            User?   @relation(fields: [actorUserId], references: [id])
+  actorServiceIdentity String?
+
+  targetType    String
+  targetId      String
+  action        String
+  correlationId String?
+
+  beforeMeta Json?
+  afterMeta  Json?
+
+  ruleVersion  String?
+  modelVersion String?
+
+  result       EventResult
+  errorMessage String?
+  reason       String?
+
+  createdAt DateTime @default(now())
+
+  @@index([practiceId, createdAt])
+  @@index([targetType, targetId])
+  @@index([correlationId])
+}

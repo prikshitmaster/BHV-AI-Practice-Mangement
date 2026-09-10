@@ -14,7 +14,7 @@ import { generateToken, hashToken } from "@/lib/crypto";
 
 /**
  * The names and the error type live in csrf-shared.ts so that client
- * components and middleware can reach them without dragging `next/headers` and
+ * components and proxy can reach them without dragging `next/headers` and
  * `node:crypto` along. Re-exported here so server code has one import path.
  */
 export {

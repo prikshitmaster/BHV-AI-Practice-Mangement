@@ -4,11 +4,13 @@
  * These run on every response. They are defence in depth, not a substitute
  * for the server-side authorisation in practice-scope.ts and permissions.ts:
  * "A lock icon or 'AES' label in the interface is not acceptance evidence."
+ *
+ * Renamed from middleware.ts to proxy.ts (Next.js 16 file convention).
  */
 
 import { NextResponse, type NextRequest } from "next/server";
 // csrf-shared, not csrf: importing csrf.ts here would pull in node:crypto and
-// next/headers, and a bad import in middleware fails every route, not one.
+// next/headers, and a bad import in proxy fails every route, not one.
 import { CSRF_COOKIE, CSRF_RAW_COOKIE } from "@/lib/csrf-shared";
 
 const isProduction = process.env.NODE_ENV === "production";
@@ -38,7 +40,7 @@ function contentSecurityPolicy(nonce: string): string {
 }
 
 /**
- * Web Crypto, not node:crypto. Middleware may run on a runtime without Node's
+ * Web Crypto, not node:crypto. Proxy may run on a runtime without Node's
  * built-ins, and importing node:crypto here takes the WHOLE app down with a
  * 500 on every route — the shell included — rather than failing only the
  * feature that needed it.
@@ -57,7 +59,7 @@ function randomToken(): string {
     .replace(/=+$/, "");
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
 
   const requestHeaders = new Headers(request.headers);

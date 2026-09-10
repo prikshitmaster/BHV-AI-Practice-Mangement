@@ -17,6 +17,10 @@ import { UnauthenticatedError } from "@/lib/session";
 import { AuthError, RateLimitError } from "@/lib/auth";
 import { LoginChallengeError } from "@/lib/login-challenge";
 import { PortalAuthError } from "@/lib/portal-auth";
+import { FeeError } from "@/lib/fees";
+import { InvoiceError } from "@/lib/invoicing";
+import { ReceiptError } from "@/lib/receipts";
+import { SeparationOfDutiesError } from "@/lib/separation-of-duties";
 
 export function errorResponse(e: unknown): NextResponse {
   if (e instanceof UnauthenticatedError) {
@@ -58,6 +62,23 @@ export function errorResponse(e: unknown): NextResponse {
   // around it. None of these messages carries record content.
   if (e instanceof DocumentError || e instanceof IntakeError || e instanceof CommunicationError) {
     return NextResponse.json({ error: e.message, code: e.code }, { status: e.status });
+  }
+
+  // FIN01/FIN02/FIN04 refusals, same shape and same reasoning: a biller who is
+  // stopped must be told WHICH rule stopped them — "over allocated", "issued
+  // particulars are locked", "no agreed rate" — or they will work around it.
+  // None of these messages carries record content.
+  if (e instanceof FeeError || e instanceof InvoiceError || e instanceof ReceiptError) {
+    return NextResponse.json({ error: e.message, code: e.code }, { status: e.status });
+  }
+
+  // IAM04. 409 rather than 403: the caller has the permission, but not on
+  // THIS record, because they authored it.
+  if (e instanceof SeparationOfDutiesError) {
+    return NextResponse.json(
+      { error: e.message, code: "SEPARATION_OF_DUTIES" },
+      { status: 409 },
+    );
   }
 
   console.error("Unhandled API error:", e);

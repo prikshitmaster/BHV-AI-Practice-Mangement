@@ -144,6 +144,9 @@ async function main() {
   const obligation = practiceId
     ? await prisma.obligation.findFirst({ where: { practiceId }, select: { id: true } })
     : null;
+  const invoice = practiceId
+    ? await prisma.invoice.findFirst({ where: { practiceId }, select: { id: true } })
+    : null;
 
   const routes: [string, string][] = [
     ["/", "Home"],
@@ -158,6 +161,8 @@ async function main() {
     [job ? `/jobs/${job.id}` : "", "Job detail"],
     [document ? `/documents/${document.id}` : "", "Document detail"],
     [obligation ? `/obligations/${obligation.id}` : "", "Obligation detail"],
+    ["/billing", "Billing"],
+    [invoice ? `/billing/${invoice.id}` : "", "Invoice detail"],
   ];
 
   /**
@@ -166,7 +171,6 @@ async function main() {
    * listed here so the gap stays visible rather than being forgotten.
    */
   const notBuiltYet: [string, string][] = [
-    ["/billing", "Billing — T14 (FIN01/02/04)"],
     ["/reports", "Reports — T17 (REP01)"],
   ];
 

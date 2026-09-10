@@ -82,11 +82,12 @@ const PINNED_NAV: {
   built: boolean;
 }[] = [
   {
-    // T14 — FIN01/FIN02/FIN04. No /billing route exists yet.
+    // T14 — FIN01/FIN02/FIN04. Built: /billing lists the register and
+    // /billing/[invoiceId] carries the issue action.
     item: { href: "/billing", label: "Billing", pinned: true },
     requires: "invoice.read",
     roles: ["FINANCE", "PRACTICE_PARTNER", "GROUP_OWNER"],
-    built: false,
+    built: true,
   },
   {
     item: { href: "/team", label: "Team", pinned: true },

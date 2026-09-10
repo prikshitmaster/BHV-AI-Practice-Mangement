@@ -921,6 +921,215 @@ To finish T16 next session:
   working single-use sign-in URL (console only, never written to a file in
   this repo). — tested against PRD §17 POR01/POR02/POR05 as rendered — PASS
 
+- 2026-09-10 — T14.1 — schema + migration `20260910100000_billing_core`.
+  T02 had already laid down InvoiceSeries/Invoice/InvoiceLine/Receipt/
+  ReceiptAllocation, so T14.1 is what those were missing against FIN01/02/04:
+  `FeeArrangement` + `FeeComponent` (there was no fee model at all),
+  `CreditNote` + `SeriesKind` so a correction gets its own numbering,
+  `Receipt.bankAccountId`, and four more `InvoiceStatus` values — FIN02
+  names seven states and the enum had three.
+  Additive by construction, and checked rather than assumed: no DROP COLUMN,
+  no DROP TYPE, no enum recreation, no new required column on a populated
+  table. The four earlier migrations here that rebuilt an enum each needed a
+  hand-written USING map to avoid dropping the column; `ALTER TYPE ... ADD
+  VALUE` sidesteps that whole class of damage. Counts before and after are
+  equal — 131 invoices, 14 receipts, 14 allocations.
+  Two deliberate compromises, both recorded because they are visible in the
+  data: (1) `Receipt.bankAccountId` is NULLABLE even though FIN04 wants a
+  receipt tied to the account it landed in — rows predate the column, and
+  inventing an account for them would put a false fact in the register, so
+  `recordReceipt()` will require one for everything created from here on;
+  (2) `ReceiptAllocation.receiptId` was WIDENED to nullable so a CREDIT_NOTE
+  allocation can settle an invoice with no money arriving — exactly one of
+  receiptId/creditNoteId is set, enforced in the library since the DB cannot
+  express it.
+  Note for later: the four new InvoiceStatus values are APPENDED, so enum
+  sort order is DRAFT,ISSUED,CANCELLED,APPROVED,PART_PAID,PAID,CREDITED — not
+  lifecycle order. Anything that sorts by status must order explicitly rather
+  than lean on the enum. Rebuilding the type to fix cosmetics is not worth the
+  DROP it would require.
+  — migrate deploy applied; enums, tables and row counts verified in psql
+
+- 2026-09-10 — T14.2 — `src/lib/fees.ts` (FIN01). The requirement's own
+  sentence — "never infer rates from a staff timer alone" — is enforced by
+  `chargeableAmount()` having NO fallback branch: it takes units and the
+  arrangement, and refuses (RATE_NOT_AGREED / RATE_NOT_APPROVED / 
+  NOT_TIME_BASED) rather than reach for a default, because a plausible
+  default is exactly how an unagreed rate reaches an invoice. The same guard
+  `assertPricingIsAgreed` runs on create AND on revise, so "revise" cannot
+  become the way to create an unpriced fee. Scope change supersedes rather
+  than edits (FIN01, same rule as ENG04), under an API02 version check inside
+  a transaction so a concurrent revision cannot fork the chain. Approval
+  freezes `approvedSnapshot` (DAT02). Engagement is read THROUGH the practice
+  scope, which is what ties a charge to the owning practice — a foreign
+  engagement id is simply not found. ADVANCE is excluded from billable
+  components on purpose: it is money against future work (FIN04 allocation),
+  not a charge to raise. — typecheck + eslint clean, not yet executed
+- 2026-09-10 — T14.3 — `src/lib/invoicing.ts` (FIN02). Numbering is an
+  atomic `UPDATE "InvoiceSeries" SET nextNumber = nextNumber + 1 ...
+  RETURNING`, not a read-then-write: the read-then-write version looks
+  correct and silently double-issues under load. Order matters inside
+  `issueInvoice` — the invoice row is CLAIMED first and the number allocated
+  only after, so a losing concurrent issue does not burn a sequence number
+  and leave a gap in a statutory series that somebody later has to explain.
+  A draft carries sequenceNumber 0 and gets its identity at ISSUE for the
+  same reason (abandoned drafts must not consume numbers).
+  ISSUED is where editing stops: `assertEditable` refuses at ISSUED,
+  PART_PAID, PAID, CREDITED and CANCELLED, and `issuedSnapshot` copies
+  practice, client, totals and every line (DAT02) so a later rename cannot
+  reach an issued invoice. Corrections go through `draftCreditNote` /
+  `issueCreditNote`, which take their number from a SEPARATE CREDIT_NOTE
+  series so a correction is never issued as an invoice number.
+  Two review rules, deliberately different: an invoice approval defers to
+  IAM04 `assertMayApprove` (which has a practice threshold below which
+  self-approval is fine), but a credit note has NO threshold — it reduces
+  revenue already reported, so the reviewer may never be the person who
+  raised it. Revising a draft un-approves it: an approval is of particulars,
+  and changed figures are not the particulars that were approved.
+  PART_PAID/PAID/CREDITED are deliberately NOT set here — they are derived
+  in receipts.ts (T14.4). — typecheck + eslint clean, not yet executed
+- 2026-09-10 — T14.4 — `src/lib/receipts.ts` (FIN04). The evidence line
+  ("cash, credited tax and balance remain distinct") is the return TYPE:
+  `settlementOf()` reports cashReceived, taxDeducted, creditedByNote,
+  writtenOff, refunded and balance as six separate fields, and there is
+  deliberately no `totalReceived` that adds cash to TDS — a caller who wants
+  one has to write the addition and own losing the distinction. The reason it
+  matters: ₹90 cash + ₹10 TDS on a ₹100 invoice is not a ₹100 payment; the
+  ₹10 went to the tax authority and the practice claims it back with a
+  certificate, which is exactly the fact netting destroys.
+  PAYMENT/ADVANCE draw down the receipt; TDS/WRITE_OFF do not, because no
+  money arrived for them — that asymmetry is the requirement stated as a
+  constraint rather than a label. Over-allocation is checked by re-reading
+  live allocations INSIDE the write transaction; a balance computed before
+  the transaction is one two concurrent allocations can both pass.
+  Reversal never deletes or edits (FIN04 "preserve reconciliation
+  adjustments"): the original is stamped reversedAt and a mirror row points
+  at it, and since both carry reversedAt, excluding that ONE field removes
+  the pair from every sum in a single condition. PART_PAID/PAID/CREDITED are
+  derived in `refreshInvoiceStatus` and written nowhere else. Fully settled
+  by credit note yields CREDITED, not PAID — FIN02 gives it its own state
+  because it is a different fact. Receipts also require a VERIFIED bank
+  account of this practice, live on the date the money arrived (ORG02).
+  — typecheck + eslint clean, not yet executed
+- 2026-09-10 — T14.7 — `tests/t14-billing.ts` WRITTEN AND RUN: **46 passed,
+  0 failed**. Deliberately pulled forward ahead of T14.5 (routes) and T14.6
+  (screens): T13 was built end to end before anything was executed, and the
+  cost of that showed up here — running the test first found two real library
+  defects that routes and screens would otherwise have been built on top of.
+  Both PRD §25 evidence points are covered: two practices each issue number 1
+  from same-named series without collision (control: the next invoice in the
+  SAME series is 2, so the headline cannot pass with numbering switched off),
+  and a 100000 invoice settled by 90000 cash + 10000 TDS reports cash, tax and
+  balance as three separate figures (control: three allocation rows, not one
+  netted).
+  **Bug 1 — nested create with a composite FK.** `draftInvoice` created its
+  lines nested under the invoice with an explicit practiceId. InvoiceLine
+  reaches its invoice through the composite FK (invoiceId, practiceId), so
+  Prisma treats practiceId as part of that relation and rejects it as a
+  nested-create field. Lines are now created in a second statement inside the
+  same transaction. `tsc` did not catch this — same blind spot as the T13
+  fixture bug.
+  **Bug 2 — a placeholder number is not "no number".** Drafts were written
+  with sequenceNumber 0, and `@@unique([seriesId, sequenceNumber])` then
+  permitted exactly ONE draft per series: the second concurrent draft died on
+  a unique violation. Fixed in migration `20260910110000_unnumbered_drafts`
+  by widening sequenceNumber to NULL on Invoice and CreditNote — Postgres
+  allows many NULLs in a unique index, so unnumbered drafts coexist while two
+  ISSUED documents still cannot share a number. This was a genuine design
+  defect that would have limited the firm to one draft invoice at a time.
+  **Bug 3 — a second author for a derived status.** Issuing a credit note
+  wrote its allocation but never re-derived the invoice status, so a fully
+  credited invoice sat at ISSUED. `refreshInvoiceStatus` is now exported from
+  receipts.ts and called from the credit note path — exported so there is one
+  WRITER of those statuses, not so there is one caller.
+  Two further failures were test bugs, not library bugs, and the library was
+  right both times: the stale-issue case pointed at an already-issued invoice
+  (the status check refused it first, proving nothing), and a PAYMENT was
+  allocated with no receipt named — which is exactly what FIN04 should refuse,
+  so that refusal is now an assertion of its own.
+  — tested against PRD §25 acceptance evidence — PASS
+
+- 2026-09-10 — T14.5 — billing API routes: POST /api/invoices (draft) added
+  to the existing GET, plus /api/invoices/[id] (detail + settlement),
+  .../approve, .../issue, .../cancel, .../allocations, .../credit-notes,
+  /api/credit-notes/[id]/issue, /api/allocations/[id]/reverse, /api/receipts
+  (GET + POST) and /api/fee-arrangements (GET + POST) with .../approve.
+  Every mutating route requires `expectedVersion` as a 400, not an optional
+  field: API02 names approvals and allocations specifically, so a caller that
+  cannot say which version it acted on has not acted on anything. The practice
+  is read FROM the record and then checked, never taken from the request body
+  — naming a practice you hold must not fetch a record belonging to one you do
+  not. There is deliberately no DELETE on an allocation anywhere in the API;
+  the correction is the reversal endpoint (FIN04). Raising a credit note and
+  issuing it are two endpoints for the same reason FIN02 says "reviewed".
+  FeeError/InvoiceError/ReceiptError and SeparationOfDutiesError are now mapped
+  in `errorResponse` — the SoD one as 409 rather than 403, because the caller
+  does hold the permission, just not on a record they authored.
+  — typecheck + eslint clean, routes NOT yet exercised over HTTP
+
+- 2026-09-10 — T14.6 — billing screens: `/billing` (register, five states,
+  status filter) and `/billing/[invoiceId]` (particulars, settlement,
+  allocations, reconciliation adjustments, credit notes), plus
+  `src/components/invoice-actions.tsx` carrying approve / issue / cancel
+  through the existing SafeAction confirm dialog. The nav has linked to
+  /billing since T16 and the destination did not exist — ux.ts literally said
+  "No /billing route exists yet" and pinned it `built: false`; that flag is now
+  true, which closes one of the T16 dangling destinations.
+  The settlement table shows cash, TDS, credited, written off and balance as
+  separate ROWS. That is not layout: rolling ₹90 cash and ₹10 TDS into
+  "₹100 received" would destroy on screen the same distinction FIN04 spends a
+  paragraph protecting in the data. Reversed allocations get their own section
+  rather than disappearing, because FIN04 says preserve them.
+  The issue action passes the version the SCREEN loaded, not a re-read at click
+  time — re-reading would send whatever the server currently holds and defeat
+  the API02 check exactly when two people have the invoice open. A 409 is
+  surfaced as a conflict and the screen reloads.
+  An invoice from another practice renders as "no such invoice in this
+  practice", the same answer the API gives, so the screen cannot be used to
+  confirm a Company invoice exists.
+  Render-checked, not assumed: `dev-walk-ui.ts` now walks /billing and an
+  invoice detail, and `seed-demo-data.ts` seeds one part-paid invoice
+  (88000 cash + 10000 TDS against 118000) so the detail page has something real
+  to draw. Both return 200. — typecheck + eslint clean, screens RENDERED
+
+- 2026-09-10 — T14.8 — Full regression, two passes as this machine requires.
+  Pass 1, dev server up: T02 13, T03 23, T04 37, T05 54, T06 44, T07 55 = 226.
+  Pass 2, dev server stopped: T08 55, T09 60, T10 56, T11 110, T12 106, T13 61,
+  T14 46 = 494. **720 assertions, 0 failed.** T14 touched shared ground — it
+  widened two columns, added four InvoiceStatus values and extended
+  `errorResponse` — and broke nothing in T02 (data model), T03 (isolation) or
+  T04 (separation of duties), the three most likely to notice.
+  Note: lint had to be run as `node ./node_modules/eslint/bin/eslint.js` to be
+  believed. The rtk wrapper printed "Lint: 2 errors, 2 warnings" for a run whose
+  underlying eslint invocation had actually failed to start; the direct run
+  scanned 9 files and found nothing. Treat a bare rtk lint summary as unverified.
+
+### T14 — COMPLETE (2026-09-10)
+
+All eight micro-steps done, parent box checked. Evidence exercised, not just
+built: `npm run test:t14` 46/46, full regression 720/720, both billing screens
+rendered 200 through `npm run dev:walk`.
+
+Built: FIN01 fee arrangements (agreed rates, milestones/expenses/advances,
+scope-change revisions), FIN02 invoice identity (per-practice series, atomic
+numbering, Draft→Approved→Issued, locked particulars, reviewed credit notes),
+FIN04 receipts and allocations (bank account, part payment / TDS / write-off /
+advance / refund kept distinct, over-allocation refused, reversals preserved).
+
+Known limits carried forward (none block T14):
+- FIN03 (place of supply, SAC, reverse charge, e-invoice), FIN05 (ageing,
+  collections) and FIN06 (accounting bridge) are R1 and NOT built. R0 records
+  the tax treatment the fee arrangement agreed; it does not compute one.
+- The billing API routes are typechecked and their libraries are tested, but
+  the ROUTES themselves have not been exercised over HTTP — only the two
+  screens have. A t14 HTTP leg, or an extension of dev-walk, would close that.
+- No screen creates a fee arrangement, drafts an invoice, or records a receipt:
+  those exist as API + library only. The screens read, and issue.
+- `Receipt.bankAccountId` is nullable at the database level for rows predating
+  T14; new receipts always carry one.
+- InvoiceStatus enum values are in insertion order, not lifecycle order —
+  anything sorting by status must ORDER BY explicitly.
+
 ### T13 — COMPLETE (2026-09-10)
 
 All nine micro-steps done and the parent box checked. Evidence actually

@@ -446,13 +446,43 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
 
 ## Phase 5 — Billing register (R0 subset)
 
-- [ ] **T14 — Fees & invoicing (core).** Implement FIN01, FIN02, FIN04
+- [x] **T14 — Fees & invoicing (core).** Implement FIN01, FIN02, FIN04
   (PRD §25): fee arrangements tied to engagement/practice, invoice
   identity with locked series, receipts/allocations. Defer FIN03
   (tax particulars), FIN05 (collections), FIN06 (accounting bridge) to R1.
   *Test: create identical invoice sequence numbers in separate practice
   series without collision; allocate a part payment and TDS deduction
   distinctly.*
+  - [x] T14.1 — Schema + migration. `FeeArrangement` (+ components for
+    milestones/expenses/advances, and a scope-change revision chain);
+    extend `InvoiceStatus` from 3 states to the 7 FIN02 names via a
+    HAND-WRITTEN additive `ALTER TYPE` (Prisma's diff drops columns on
+    enum changes — see the four migrations already hand-edited for this);
+    `CreditNote` + its own series; `bankAccountId` on `Receipt`;
+    `REFUND` on `AllocationKind`.
+  - [x] T14.2 — `src/lib/fees.ts` (FIN01): fee arrangements tied to
+    engagement + owning practice, agreed tax treatment/currency/effective
+    rate/approval stored, scope change as a revision that preserves the
+    original. A rate must be agreed, never inferred from a timer.
+  - [x] T14.3 — `src/lib/invoicing.ts` (FIN02): series numbering that
+    cannot collide across practices and cannot double-issue under
+    concurrency; Draft → Approved → Issued lifecycle; issued particulars
+    locked in `issuedSnapshot`; corrections only via credit note.
+  - [x] T14.4 — `src/lib/receipts.ts` (FIN04): receipt against the correct
+    practice bank account; part payment, TDS, advance, write-off and
+    refund as distinct allocations; over-allocation refused; Part paid /
+    Paid / Credited derived from allocations, never typed by hand.
+  - [x] T14.5 — API routes for fee arrangements, invoices (draft/approve/
+    issue/cancel/credit) and receipts/allocations.
+  - [x] T14.6 — Screens: invoice list, invoice detail with issue action,
+    receipt allocation. This is what unblocks T16's third acceptance leg
+    ("invoice issue using only the keyboard"). Render-checked via
+    `npm run dev:walk`, which now covers both.
+  - [x] T14.7 — Acceptance test `tests/t14-billing.ts` covering both PRD
+    evidence points + the safeguards, each with a control. RUN EARLY, ahead
+    of T14.5/T14.6, so routes and screens are not built on unverified logic
+    — it found two real defects in the libraries and one in the schema.
+  - [x] T14.8 — Run the acceptance test + full regression suite.
 
 ## Phase 6 — Platform correctness
 

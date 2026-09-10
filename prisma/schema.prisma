@@ -198,6 +198,8 @@ model Practice {
   retentionPolicies   RetentionPolicy[]
   legalHolds          LegalHold[]
   supportContacts     PracticeSupportContact[]
+  feeArrangements     FeeArrangement[]
+  creditNotes         CreditNote[]
 
   // IAM04: invoices above this value require independent review.
   invoiceApprovalThreshold Decimal @default(0) @db.Decimal(18, 2)
@@ -278,6 +280,8 @@ model PracticeBankAccount {
   verifiedAt    DateTime?
   verifiedBy    String?
   archivedAt    DateTime?
+
+  receipts Receipt[]
 
   @@unique([id, practiceId])
   @@index([practiceId, effectiveFrom])
@@ -1039,6 +1043,8 @@ model ClientRelationship {
   portalUploads      PortalUpload[]
 
   // The composite key every practice-scoped child FKs against.
+  feeArrangements FeeArrangement[]
+
   @@unique([id, practiceId])
   @@unique([practiceId, partyId])
 }
@@ -1176,6 +1182,7 @@ model Engagement {
   changes     EngagementChange[]
   blocks      EngagementBlock[]
   messageThreads MessageThread[]
+  feeArrangements FeeArrangement[]
 
   @@unique([id, practiceId])
   @@index([practiceId, state])
@@ -2435,17 +2442,70 @@ model DeletionRequest {
 // Invoice / receipt
 // ---------------------------------------------------------------------------
 
+// FIN02 names seven states, and they are not interchangeable. DRAFT and
+// APPROVED are editable; ISSUED onward are not. PART_PAID, PAID and CREDITED
+// are DERIVED from allocations (see src/lib/receipts.ts) and never typed by
+// hand — a status somebody can set directly is a status that will disagree
+// with the money.
 enum InvoiceStatus {
   DRAFT
+  APPROVED
   ISSUED
+  PART_PAID
+  PAID
+  CREDITED
   CANCELLED
 }
 
+// FIN04: "Separate cash received from tax deducted and credit notes." Each of
+// these settles an invoice for a different reason, and netting them into one
+// figure is exactly what the requirement forbids — TDS is a tax credit the
+// client claims, not cash the practice banked.
 enum AllocationKind {
   PAYMENT
   TDS
   WRITE_OFF
   ADVANCE
+  REFUND
+  CREDIT_NOTE
+}
+
+// FIN02: a credit note carries its own numbering, so a correction is never
+// issued as an invoice number and the invoice series stays gapless.
+enum SeriesKind {
+  INVOICE
+  CREDIT_NOTE
+}
+
+// FIN01 fee bases. TIME_BASED still requires an agreed rate on the
+// arrangement — "never infer rates from a staff timer alone."
+enum FeeBasis {
+  FIXED
+  RECURRING
+  MILESTONE
+  TIME_BASED
+}
+
+enum FeeArrangementStatus {
+  DRAFT
+  APPROVED
+  SUPERSEDED
+  WITHDRAWN
+}
+
+// FIN01 charge types that are not the headline fee.
+enum FeeComponentKind {
+  MILESTONE
+  REIMBURSABLE_EXPENSE
+  ADVANCE
+  SCOPE_CHANGE
+}
+
+enum CreditNoteStatus {
+  DRAFT
+  APPROVED
+  ISSUED
+  CANCELLED
 }
 
 // FIN02: each practice owns its own series. Two practices may both issue
@@ -2457,13 +2517,19 @@ model InvoiceSeries {
   registrationId String?
   registration   PracticeRegistration? @relation(fields: [registrationId, practiceId], references: [id, practiceId])
 
+  kind         SeriesKind @default(INVOICE)
   code         String
   fiscalPeriod String
   nextNumber   Int      @default(1)
+
+  /// FIN02 "approved numbering policy": once locked, the shape of the number
+  /// is fixed for the series. Nothing here regenerates past numbers.
+  numberFormat String?
   lockedAt     DateTime?
   archivedAt   DateTime?
 
-  invoices Invoice[]
+  invoices    Invoice[]
+  creditNotes CreditNote[]
 
   @@unique([id, practiceId])
   @@unique([practiceId, code, fiscalPeriod])
@@ -2480,10 +2546,31 @@ model Invoice {
   engagementId         String?
   engagement           Engagement?        @relation(fields: [engagementId, practiceId], references: [id, practiceId])
 
-  sequenceNumber Int
+  feeArrangementId String?
+  feeArrangement   FeeArrangement? @relation(fields: [feeArrangementId, practiceId], references: [id, practiceId])
+
+  /// NULL until issue. FIN02 numbers an invoice when it is ISSUED, and a
+  /// draft genuinely has no number — writing a placeholder 0 instead made
+  /// @@unique([seriesId, sequenceNumber]) allow only ONE draft per series.
+  /// Postgres permits many NULLs in a unique index, which is exactly the
+  /// shape of the fact: unnumbered drafts do not compete for a number.
+  sequenceNumber Int?
+  /// The rendered number a client sees ("FA/2025-26/1"). Held alongside the
+  /// integer because the policy that produced it can change for LATER series
+  /// and an issued number must keep the form it was issued in.
+  displayNumber  String?
   currency       String        @default("INR") @db.Char(3)
   taxRuleVersion String?
   status         InvoiceStatus @default(DRAFT)
+
+  issueDate DateTime? @db.Date
+  dueDate   DateTime? @db.Date
+
+  // FIN02 approval is separate from issue: approving says the particulars are
+  // right, issuing sends it and locks them.
+  approvedByUserId String?
+  approvedByName   String?
+  approvedAt       DateTime?
 
   subtotal Decimal @default(0) @db.Decimal(18, 2)
   taxTotal Decimal @default(0) @db.Decimal(18, 2)
@@ -2503,6 +2590,7 @@ model Invoice {
 
   lines       InvoiceLine[]
   allocations ReceiptAllocation[]
+  creditNotes CreditNote[]
 
   @@unique([id, practiceId])
   @@unique([seriesId, sequenceNumber])
@@ -2532,6 +2620,13 @@ model Receipt {
   clientRelationshipId String
   clientRelationship   ClientRelationship @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
 
+  /// FIN04 "against the correct bank account". Optional at the DATABASE level
+  /// only because rows predating this column exist and inventing a bank
+  /// account for them would be worse than recording that none was captured;
+  /// `recordReceipt` requires one for everything created from here on.
+  bankAccountId String?
+  bankAccount   PracticeBankAccount? @relation(fields: [bankAccountId, practiceId], references: [id, practiceId])
+
   amount     Decimal  @db.Decimal(18, 2)
   currency   String   @default("INR") @db.Char(3)
   receivedAt DateTime
@@ -2553,8 +2648,15 @@ model ReceiptAllocation {
   id         String   @id @default(uuid())
   practiceId String
   practice   Practice @relation(fields: [practiceId], references: [id])
-  receiptId  String
-  receipt    Receipt  @relation(fields: [receiptId, practiceId], references: [id, practiceId])
+  /// Nullable because a CREDIT_NOTE allocation settles an invoice without any
+  /// money arriving. Exactly one of receiptId / creditNoteId is set, and
+  /// `allocateReceipt` is the only writer that enforces it.
+  receiptId  String?
+  receipt    Receipt? @relation(fields: [receiptId, practiceId], references: [id, practiceId])
+
+  creditNoteId String?
+  creditNote   CreditNote? @relation(fields: [creditNoteId, practiceId], references: [id, practiceId])
+
   invoiceId  String
   invoice    Invoice  @relation(fields: [invoiceId, practiceId], references: [id, practiceId])
 
@@ -2562,6 +2664,157 @@ model ReceiptAllocation {
   amount    Decimal        @db.Decimal(18, 2)
   createdAt DateTime       @default(now())
 
+  // FIN04 "preserve reconciliation adjustments": a wrong allocation is
+  // REVERSED by a row that points at it, never deleted and never edited. The
+  // balance maths ignores a reversed row and its reversal in equal measure,
+  // so both stay visible to whoever has to reconcile.
+  reversedAt     DateTime?
+  reversalReason String?
+  reversalOfId   String?             @unique
+  reversalOf     ReceiptAllocation?  @relation("AllocationReversal", fields: [reversalOfId], references: [id])
+  reversedBy     ReceiptAllocation?  @relation("AllocationReversal")
+
+  createdByUserId String?
+
+  @@index([practiceId, invoiceId])
+}
+
+// ---------------------------------------------------------------------------
+// FIN01 fee arrangements
+// ---------------------------------------------------------------------------
+
+/// FIN01: what was AGREED, tied to the engagement and the owning practice.
+/// A change of scope does not edit this row — it supersedes it with a
+/// revision, so the fee that was agreed for work already done stays readable.
+model FeeArrangement {
+  id                   String             @id @default(uuid())
+  practiceId           String
+  practice             Practice           @relation(fields: [practiceId], references: [id])
+  clientRelationshipId String
+  clientRelationship   ClientRelationship @relation(fields: [clientRelationshipId, practiceId], references: [id, practiceId])
+  engagementId         String
+  engagement           Engagement         @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+
+  basis    FeeBasis
+  currency String   @default("INR") @db.Char(3)
+
+  /// The agreed headline amount. For TIME_BASED this is null and
+  /// `agreedRateAmount` carries the rate instead.
+  agreedAmount Decimal? @db.Decimal(18, 2)
+
+  /// FIN01: an agreed rate, recorded per unit, with the unit named. A timer
+  /// may report hours; it may not supply the price of one.
+  agreedRateAmount Decimal? @db.Decimal(18, 2)
+  agreedRateUnit   String?
+
+  /// RECURRING only — "monthly", "quarterly". Kept as the agreed words rather
+  /// than a schedule the system invents.
+  recurrenceLabel String?
+
+  /// FIN01 "agreed tax treatment". The full FIN03 particulars (place of
+  /// supply, SAC, reverse charge) are R1; what R0 records is what the
+  /// engagement letter said the treatment would be.
+  taxTreatment   String
+  taxRatePercent Decimal @default(0) @db.Decimal(5, 2)
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  status           FeeArrangementStatus @default(DRAFT)
+  approvedByUserId String?
+  approvedByName   String?
+  approvedAt       DateTime?
+
+  /// DAT02: particulars frozen at approval, so later master-data edits cannot
+  /// rewrite what was agreed.
+  approvedSnapshot Json?
+
+  // FIN01 scope change — same shape as ENG04's engagement revisions.
+  parentArrangementId String?
+  parent              FeeArrangement?  @relation("FeeRevision", fields: [parentArrangementId], references: [id])
+  revisions           FeeArrangement[] @relation("FeeRevision")
+  revisionNumber      Int              @default(0)
+  supersededAt        DateTime?
+  changeReason        String?
+
+  version   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  components FeeComponent[]
+  invoices   Invoice[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, engagementId, status])
+}
+
+/// FIN01 milestones, reimbursable expenses and advances. Each is billable
+/// once: `invoicedAt` is what stops a milestone being charged twice.
+model FeeComponent {
+  id            String         @id @default(uuid())
+  practiceId    String
+  arrangementId String
+  arrangement   FeeArrangement @relation(fields: [arrangementId, practiceId], references: [id, practiceId])
+
+  kind        FeeComponentKind
+  description String
+  amount      Decimal          @db.Decimal(18, 2)
+  dueOn       DateTime?        @db.Date
+
+  reachedAt   DateTime?
+  invoicedAt  DateTime?
+  invoiceId   String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([id, practiceId])
+  @@index([practiceId, arrangementId])
+}
+
+// ---------------------------------------------------------------------------
+// FIN02 corrections
+// ---------------------------------------------------------------------------
+
+/// FIN02: "Issued particulars are locked; corrections use reviewed credit /
+/// debit notes." A credit note is therefore a document in its own right, with
+/// its own number, its own review and its own immutable snapshot — not an
+/// adjustment written back onto the invoice.
+model CreditNote {
+  id         String        @id @default(uuid())
+  practiceId String
+  practice   Practice      @relation(fields: [practiceId], references: [id])
+  seriesId   String
+  series     InvoiceSeries @relation(fields: [seriesId, practiceId], references: [id, practiceId])
+  invoiceId  String
+  invoice    Invoice       @relation(fields: [invoiceId, practiceId], references: [id, practiceId])
+
+  /// NULL until issue, for the same reason as Invoice.sequenceNumber.
+  sequenceNumber Int?
+  displayNumber  String?
+
+  reason   String
+  amount   Decimal          @db.Decimal(18, 2)
+  currency String           @default("INR") @db.Char(3)
+  status   CreditNoteStatus @default(DRAFT)
+
+  // "Reviewed" is the operative word in FIN02 — a correction one person can
+  // raise and issue alone is not reviewed.
+  reviewedByUserId String?
+  reviewedByName   String?
+  reviewedAt       DateTime?
+
+  issuedSnapshot Json?
+  issuedAt       DateTime?
+  cancelledAt    DateTime?
+
+  version   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  allocations ReceiptAllocation[]
+
+  @@unique([id, practiceId])
+  @@unique([seriesId, sequenceNumber])
   @@index([practiceId, invoiceId])
 }
 

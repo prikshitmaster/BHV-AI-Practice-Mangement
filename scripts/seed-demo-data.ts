@@ -303,12 +303,118 @@ async function main() {
     });
   }
 
+  // T14 billing (FIN01/FIN02/FIN04). One issued invoice, part settled by cash
+  // and TDS, so /billing and /billing/[id] have something real to render and
+  // the settlement table shows the distinction FIN04 turns on rather than a
+  // row of zeroes. Written directly rather than through the libraries because
+  // this is a seed, not a workflow: the libraries enforce separation of duties,
+  // which one seeded user cannot satisfy on their own.
+  const bankAccount = await prisma.practiceBankAccount.create({
+    data: {
+      practiceId,
+      label: "Demo current account",
+      bankName: "Fictional Bank",
+      accountNumber: "0000000000",
+      ifsc: "FAKE0000000",
+      effectiveFrom: dateOnly(-400),
+      verifiedAt: new Date(),
+      verifiedBy: user.fullName,
+    },
+  });
+
+  const series = await prisma.invoiceSeries.create({
+    data: {
+      practiceId,
+      kind: "INVOICE",
+      code: "INV",
+      fiscalPeriod: "2025-26",
+      numberFormat: "{code}/{fiscalPeriod}/{number}",
+      nextNumber: 2,
+    },
+  });
+
+  const invoice = await prisma.invoice.create({
+    data: {
+      practiceId,
+      seriesId: series.id,
+      clientRelationshipId: relationships[0].id,
+      engagementId: engagements[0].id,
+      sequenceNumber: 1,
+      displayNumber: "INV/2025-26/1",
+      currency: "INR",
+      status: "ISSUED",
+      issueDate: dateOnly(-40),
+      dueDate: dateOnly(-10),
+      subtotal: "100000.00",
+      taxTotal: "18000.00",
+      total: "118000.00",
+      issuedAt: new Date(),
+      issuedSnapshot: {
+        number: "INV/2025-26/1",
+        client: { legalName: relationships[0].name },
+        total: "118000.00",
+      } as never,
+    },
+  });
+
+  await prisma.invoiceLine.create({
+    data: {
+      practiceId,
+      invoiceId: invoice.id,
+      description: "Annual GST return preparation and filing (fictional)",
+      quantity: "1.0000",
+      unitAmount: "100000.00",
+      taxRatePercent: "18.00",
+      lineTotal: "100000.00",
+      sortOrder: 0,
+    },
+  });
+
+  const receipt = await prisma.receipt.create({
+    data: {
+      practiceId,
+      clientRelationshipId: relationships[0].id,
+      bankAccountId: bankAccount.id,
+      amount: "88000.00",
+      currency: "INR",
+      receivedAt: dateOnly(-5),
+      method: "NEFT",
+      reference: "DEMO-NEFT-0001",
+    },
+  });
+
+  await prisma.receiptAllocation.createMany({
+    data: [
+      {
+        practiceId,
+        receiptId: receipt.id,
+        invoiceId: invoice.id,
+        kind: "PAYMENT",
+        amount: "88000.00",
+        createdByUserId: user.id,
+      },
+      {
+        practiceId,
+        invoiceId: invoice.id,
+        kind: "TDS",
+        amount: "10000.00",
+        createdByUserId: user.id,
+      },
+    ],
+  });
+
+  await prisma.invoice.update({
+    where: { id: invoice.id },
+    data: { status: "PART_PAID" },
+  });
+
   // The marker, written last so a crash mid-seed does not look complete.
   await prisma.party.create({ data: { tenantId, legalName: MARKER, type: "COMPANY" } });
 
   console.log(`\nSeeded demo data into "${membership.practice.name}":`);
   console.log(`  ${relationships.length} clients, ${engagements.length} engagements, ${jobSpecs.length} jobs,`);
-  console.log(`  ${obligationSpecs.length} obligations, ${documentSpecs.length} documents.`);
+  console.log(`  ${obligationSpecs.length} obligations, ${documentSpecs.length} documents,`);
+  console.log("  1 part-paid invoice (88000 cash + 10000 TDS against 118000).");
   console.log("  All fictional. Sign in at http://localhost:3000/login\n");
 }
 

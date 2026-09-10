@@ -8,14 +8,19 @@
  * this repo before onboarding confirms it — this file is not the place to
  * change that.
  *
- * Attaches to the practices created by seed-dev-user.ts, and is idempotent:
- * it does nothing if its marker party already exists.
+ * Attaches to the practices created by seed-dev-user.ts. The core dataset
+ * (clients, engagements, jobs, obligations, documents, one invoice) is
+ * idempotent: it does nothing if its marker party already exists. The portal
+ * invitation issued at the end is NOT idempotent on purpose — invitations are
+ * single-use, so a fresh one is minted and printed every run, whether or not
+ * the core dataset already existed.
  *
  * Run: npm run seed:demo
  */
 
 import "dotenv/config";
 import { prisma } from "../src/lib/prisma";
+import { issuePortalInvitation } from "../src/lib/portal-auth";
 
 if (process.env.NODE_ENV === "production") {
   throw new Error("seed-demo-data is a local development helper and must not run in production.");
@@ -31,55 +36,44 @@ const dateOnly = (offsetDays: number) => {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 };
 
-async function main() {
-  const user = await prisma.user.findUnique({ where: { email: EMAIL } });
-  if (!user) throw new Error(`No user ${EMAIL}. Run: npm run seed:dev-user first.`);
+const clientSpecs = [
+  {
+    legalName: "Meridian Textiles Private Limited",
+    type: "COMPANY" as const,
+    pan: "AAACM1234F",
+    gstin: "27AAACM1234F1ZP",
+    stateCode: "27",
+    contact: { fullName: "R. Deshpande", designation: "Finance Head" },
+  },
+  {
+    legalName: "Kalindi Foods LLP",
+    type: "LLP" as const,
+    pan: "AABFK5678G",
+    gstin: "24AABFK5678G1Z4",
+    stateCode: "24",
+    contact: { fullName: "S. Mehta", designation: "Designated Partner" },
+  },
+  {
+    legalName: "Arunoday Charitable Trust",
+    type: "TRUST" as const,
+    pan: "AAATA9012H",
+    gstin: null,
+    stateCode: null,
+    contact: { fullName: "P. Iyer", designation: "Trustee" },
+  },
+];
 
-  const membership = await prisma.practiceMembership.findFirst({
-    where: { userId: user.id, revokedAt: null },
-    select: { practiceId: true, practice: { select: { tenantId: true, name: true } } },
-    orderBy: { practice: { name: "asc" } },
-  });
-  if (!membership) throw new Error(`${EMAIL} has no live practice membership.`);
+type Rel = { id: string; name: string; partyId: string; contactId: string };
 
-  const { practiceId } = membership;
-  const { tenantId } = membership.practice;
-
-  const existing = await prisma.party.findFirst({ where: { tenantId, legalName: MARKER } });
-  if (existing) {
-    console.log("\nDemo data already present. Delete the marker party to reseed.\n");
-    return;
-  }
-
+/** Creates the full core dataset. Only called when the marker is absent. */
+async function createCoreDemoData(
+  practiceId: string,
+  tenantId: string,
+  userId: string,
+  userFullName: string,
+): Promise<{ relationships: Rel[]; engagements: { id: string }[] }> {
   // ---------------------------------------------------------------- clients
-  const clientSpecs = [
-    {
-      legalName: "Meridian Textiles Private Limited",
-      type: "COMPANY" as const,
-      pan: "AAACM1234F",
-      gstin: "27AAACM1234F1ZP",
-      stateCode: "27",
-      contact: { fullName: "R. Deshpande", designation: "Finance Head" },
-    },
-    {
-      legalName: "Kalindi Foods LLP",
-      type: "LLP" as const,
-      pan: "AABFK5678G",
-      gstin: "24AABFK5678G1Z4",
-      stateCode: "24",
-      contact: { fullName: "S. Mehta", designation: "Designated Partner" },
-    },
-    {
-      legalName: "Arunoday Charitable Trust",
-      type: "TRUST" as const,
-      pan: "AAATA9012H",
-      gstin: null,
-      stateCode: null,
-      contact: { fullName: "P. Iyer", designation: "Trustee" },
-    },
-  ];
-
-  const relationships: { id: string; name: string }[] = [];
+  const relationships: Rel[] = [];
 
   for (const spec of clientSpecs) {
     const party = await prisma.party.create({
@@ -139,7 +133,7 @@ async function main() {
       },
     });
 
-    relationships.push({ id: relationship.id, name: spec.legalName });
+    relationships.push({ id: relationship.id, name: spec.legalName, partyId: party.id, contactId: contact.id });
   }
 
   // ------------------------------------------------------------ engagements
@@ -158,7 +152,7 @@ async function main() {
           exclusions: "Representation before authorities is not included unless separately engaged.",
           feeBasis: ["Fixed retainer, billed quarterly", "Fixed fee on completion", "Time basis"][i],
           state: "ACTIVE",
-          ownerUserId: user.id,
+          ownerUserId: userId,
           acceptedAt: dateOnly(-345),
         },
       }),
@@ -191,8 +185,8 @@ async function main() {
         state: spec.state,
         priority: spec.priority,
         dueDate: dateOnly(spec.due),
-        ownerUserId: user.id,
-        reviewerUserId: user.id,
+        ownerUserId: userId,
+        reviewerUserId: userId,
         completedAt: spec.state === "COMPLETED" ? dateOnly(-44) : null,
       },
     });
@@ -217,14 +211,19 @@ async function main() {
   const obligationSpecs: {
     periodKey: string;
     due: number;
-    status: "OPEN" | "DUE_SOON" | "OVERDUE" | "REVIEW_REQUIRED";
+    status: "OPEN" | "DUE_SOON" | "OVERDUE" | "REVIEW_REQUIRED" | "FILED";
     category: "COMPANY_PRIVATE" | "LLP" | "TRUST" | null;
+    filedAt?: number;
   }[] = [
     { periodKey: "FY2025-26", due: 12, status: "DUE_SOON", category: "COMPANY_PRIVATE" },
     { periodKey: "FY2025-26", due: -6, status: "OVERDUE", category: "LLP" },
     // DUE04: an obligation whose taxpayer category is unknown stays visible in
     // REVIEW_REQUIRED rather than being given a date it cannot justify.
     { periodKey: "FY2025-26", due: 30, status: "REVIEW_REQUIRED", category: null },
+    // REP01/on-time-filing-rate needs real FILED history to show a rate other
+    // than "not available" — one filed on time, one filed late.
+    { periodKey: "FY2024-25", due: -60, status: "FILED", category: "COMPANY_PRIVATE", filedAt: -63 },
+    { periodKey: "FY2024-25", due: -90, status: "FILED", category: "LLP", filedAt: -80 },
   ];
 
   for (const [i, spec] of obligationSpecs.entries()) {
@@ -244,6 +243,7 @@ async function main() {
         governingLaw: "CGST_ACT_2017",
         taxpayerCategory: spec.category,
         status: spec.status,
+        filedAt: spec.filedAt !== undefined ? dateOnly(spec.filedAt) : null,
       },
     });
   }
@@ -295,9 +295,9 @@ async function main() {
         scanVerdict: "PENDING",
         filename: `${spec.title}.pdf`,
         status: i === 2 ? "APPROVED" : "DRAFT",
-        preparedByUserId: user.id,
-        approvedByUserId: i === 2 ? user.id : null,
-        approvedByUserName: i === 2 ? user.fullName : null,
+        preparedByUserId: userId,
+        approvedByUserId: i === 2 ? userId : null,
+        approvedByUserName: i === 2 ? userFullName : null,
         approvedAt: i === 2 ? dateOnly(-30) : null,
       },
     });
@@ -318,7 +318,7 @@ async function main() {
       ifsc: "FAKE0000000",
       effectiveFrom: dateOnly(-400),
       verifiedAt: new Date(),
-      verifiedBy: user.fullName,
+      verifiedBy: userFullName,
     },
   });
 
@@ -391,14 +391,14 @@ async function main() {
         invoiceId: invoice.id,
         kind: "PAYMENT",
         amount: "88000.00",
-        createdByUserId: user.id,
+        createdByUserId: userId,
       },
       {
         practiceId,
         invoiceId: invoice.id,
         kind: "TDS",
         amount: "10000.00",
-        createdByUserId: user.id,
+        createdByUserId: userId,
       },
     ],
   });
@@ -411,11 +411,183 @@ async function main() {
   // The marker, written last so a crash mid-seed does not look complete.
   await prisma.party.create({ data: { tenantId, legalName: MARKER, type: "COMPANY" } });
 
-  console.log(`\nSeeded demo data into "${membership.practice.name}":`);
-  console.log(`  ${relationships.length} clients, ${engagements.length} engagements, ${jobSpecs.length} jobs,`);
-  console.log(`  ${obligationSpecs.length} obligations, ${documentSpecs.length} documents,`);
-  console.log("  1 part-paid invoice (88000 cash + 10000 TDS against 118000).");
-  console.log("  All fictional. Sign in at http://localhost:3000/login\n");
+  return { relationships, engagements };
+}
+
+/** Looks up the core dataset created by a previous run, instead of recreating it. */
+async function lookupCoreDemoData(practiceId: string, tenantId: string): Promise<{ relationships: Rel[] }> {
+  const relationships: Rel[] = [];
+  for (const spec of clientSpecs) {
+    const party = await prisma.party.findFirstOrThrow({ where: { tenantId, legalName: spec.legalName } });
+    const relationship = await prisma.clientRelationship.findFirstOrThrow({
+      where: { practiceId, partyId: party.id },
+    });
+    const contact = await prisma.contact.findFirstOrThrow({ where: { partyId: party.id } });
+    relationships.push({ id: relationship.id, name: spec.legalName, partyId: party.id, contactId: contact.id });
+  }
+  return { relationships };
+}
+
+/** POR05: one verified support route (shown), one unverified (withheld). Idempotent by label. */
+async function ensureSupportContacts(practiceId: string, userFullName: string) {
+  const already = await prisma.practiceSupportContact.findFirst({
+    where: { practiceId, label: "Client support" },
+  });
+  if (already) return;
+
+  await prisma.practiceSupportContact.create({
+    data: {
+      practiceId,
+      label: "Unverified desk",
+      phone: "+91 00000 00000",
+      effectiveFrom: dateOnly(-400),
+    },
+  });
+  await prisma.practiceSupportContact.create({
+    data: {
+      practiceId,
+      label: "Client support",
+      phone: "+91 11111 11111",
+      email: "demo.support@example.invalid",
+      hoursLabel: "Mon-Fri, 10am-6pm IST",
+      verifiedAt: new Date(),
+      verifiedBy: userFullName,
+      effectiveFrom: dateOnly(-400),
+    },
+  });
+}
+
+/**
+ * COM01/COM02 demo content: a thread with one internal note (never shown to
+ * the client) and one client-visible message, plus an open client request with
+ * one outstanding item — so /clients/[id] (Communication tab) and the portal
+ * upload screen both have something real. Idempotent by thread subject.
+ */
+async function ensureCommunication(
+  practiceId: string,
+  relationship: Rel,
+  userId: string,
+  userFullName: string,
+) {
+  const subject = "Demo — GSTR-9 queries";
+  const already = await prisma.messageThread.findFirst({ where: { practiceId, subject } });
+  if (already) return;
+
+  const engagement = await prisma.engagement.findFirstOrThrow({
+    where: { practiceId, clientRelationshipId: relationship.id },
+  });
+
+  const thread = await prisma.messageThread.create({
+    data: {
+      practiceId,
+      clientRelationshipId: relationship.id,
+      engagementId: engagement.id,
+      subject,
+      visibility: "CLIENT_VISIBLE",
+      createdByUserId: userId,
+    },
+  });
+
+  await prisma.message.create({
+    data: {
+      practiceId,
+      threadId: thread.id,
+      direction: "INTERNAL_NOTE",
+      channel: "NOTE",
+      visibility: "INTERNAL",
+      body: "Flagged for review before we ask the client — ITC mismatch on two invoices, checking with the reconciliation working paper first. (fictional)",
+      authorUserId: userId,
+      authorName: userFullName,
+    },
+  });
+
+  await prisma.message.create({
+    data: {
+      practiceId,
+      threadId: thread.id,
+      direction: "OUTBOUND_TO_CLIENT",
+      channel: "PORTAL",
+      visibility: "CLIENT_VISIBLE",
+      body: "Could you confirm the two supplier invoices listed in the attached working — we want to reconcile before filing GSTR-9. (fictional)",
+      authorUserId: userId,
+      authorName: userFullName,
+    },
+  });
+
+  const request = await prisma.clientRequest.create({
+    data: {
+      practiceId,
+      clientRelationshipId: relationship.id,
+      engagementId: engagement.id,
+      title: "Documents for GSTR-9",
+      detail: "Please share the items below for the annual return. (fictional)",
+      requestedItems: [],
+      closeRule: "ON_ACCEPTANCE",
+      state: "SENT",
+      sentAt: new Date(),
+      dueDate: dateOnly(20),
+    },
+  });
+
+  await prisma.clientRequestItem.create({
+    data: {
+      practiceId,
+      requestId: request.id,
+      sequence: 1,
+      documentType: "Purchase register",
+      description: "Full year, all GSTINs. (fictional)",
+      periodLabel: "FY2025-26",
+      dueDate: dateOnly(20),
+      ownerUserId: userId,
+    },
+  });
+}
+
+async function main() {
+  const user = await prisma.user.findUnique({ where: { email: EMAIL } });
+  if (!user) throw new Error(`No user ${EMAIL}. Run: npm run seed:dev-user first.`);
+
+  const membership = await prisma.practiceMembership.findFirst({
+    where: { userId: user.id, revokedAt: null },
+    select: { practiceId: true, practice: { select: { tenantId: true, name: true } } },
+    orderBy: { practice: { name: "asc" } },
+  });
+  if (!membership) throw new Error(`${EMAIL} has no live practice membership.`);
+
+  const { practiceId } = membership;
+  const { tenantId } = membership.practice;
+
+  const existing = await prisma.party.findFirst({ where: { tenantId, legalName: MARKER } });
+
+  const { relationships } = existing
+    ? await lookupCoreDemoData(practiceId, tenantId)
+    : await createCoreDemoData(practiceId, tenantId, user.id, user.fullName);
+
+  if (existing) {
+    console.log("\nCore demo data already present (clients, engagements, jobs, obligations,");
+    console.log("documents, one invoice). Delete the marker party to reseed from scratch.\n");
+  } else {
+    console.log(`\nSeeded demo data into "${membership.practice.name}":`);
+    console.log(`  ${relationships.length} clients, engagements, jobs, obligations, documents,`);
+    console.log("  1 part-paid invoice (88000 cash + 10000 TDS against 118000).");
+  }
+
+  // These run every time, so a portal link is always available even after the
+  // core dataset already existed from an earlier run.
+  await ensureSupportContacts(practiceId, user.fullName);
+  await ensureCommunication(practiceId, relationships[0], user.id, user.fullName);
+
+  const invite = await issuePortalInvitation({
+    practiceId,
+    contactId: relationships[0].contactId,
+    grants: [{ clientRelationshipId: relationships[0].id, authority: "UPLOAD" }],
+    invitedByUserId: user.id,
+    invitedByName: user.fullName,
+  });
+
+  console.log("\nAll fictional. Staff sign-in: http://localhost:3000/login");
+  console.log(`Portal sign-in (single-use, fresh this run — re-run to get a new one):`);
+  console.log(`  http://localhost:3000/portal/sign-in/${invite.token}\n`);
 }
 
 main()

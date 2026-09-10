@@ -1243,6 +1243,135 @@ To finish T16 next session:
   (install + log into claude.ai + restart Chrome) or a person doing the walk
   from the sign-in steps above. T16 stays [~] until then.
 
+- 2026-09-10 — T17.1/T17.2 — `src/lib/reports.ts`, the shell (REP01). A report
+  is not a number here: `ReportResult` carries the formula text, the scope, the
+  as-at moment, the status basis, the refresh time and the record count
+  alongside every figure, because §40 opens with "every metric must identify
+  scope, period, status basis and drill through records". `ratio()` is the only
+  way to build a proportion and returns `value: null` with a stated reason when
+  the denominator is empty — "0% on-time" and "nothing was due" are opposite
+  findings that look identical once 0/0 has been coerced. Filters resolve
+  through `practiceScopeFilter`, and branch/team/client ids are each checked to
+  belong to a permitted practice: a branch id pasted into a query string is a
+  perfectly good way across a practice boundary otherwise. `DATE_POLICY` +
+  `statutoryDateAsAt` reconstruct the date in force at the report's as-at
+  moment from `ObligationChange`, which is the §40 extension evidence.
+  — typecheck clean; tested in T17.6.
+
+- 2026-09-10 — T17.3/T17.4/T17.5 — `src/lib/report-metrics.ts`: the four §40
+  metrics R0 data can actually support — on-time filing rate, work and review
+  ageing, document completeness, receivables ageing. The other three are NOT
+  stubbed: time utilisation needs a defined capacity, engagement economics a
+  recognised-revenue basis and WIP, practice quality the R1 monitoring records.
+  A plausible number computed from data the system does not hold is worse than
+  an absent report, and §40 explicitly forbids mixing cash and revenue.
+  Each metric keeps its awkward cases OUT of its ratio rather than folding them
+  in: unknown/disputed obligations are their own bucket, waived request items
+  are outside the population, received-but-unaccepted is its own measure, and
+  cash / TDS / write-off / credit are never summed into "received".
+  `report-catalogue.ts` is the single entry point — importing the shell alone
+  gives an empty registry, so it registers the definitions and then ASSERTS the
+  registry is non-empty, because a bare side-effect import is the line a
+  refactor deletes as unused.
+  tsc caught three real errors on the first pass: `ObligationRule` has `code`,
+  not `name`, and `InvoiceStatus` has neither OVERDUE nor DISPUTED — overdue is
+  derived from the due date and disputes are R1 (FIN05).
+  — typecheck clean; tested in T17.6.
+
+- 2026-09-10 — T17.6 — `tests/t17-reports.ts` WRITTEN AND RUN BEFORE the routes
+  and screens. 46/46. Both §40 evidence sentences are exercised: the drill
+  returns the records behind a figure and the CSV reconciles to it
+  (`[numerator / denominator]` compared literally against the measure), and the
+  extension leg proves the date policy by running the SAME report twice — once
+  now, once as-at an instant before `applyExtension` ran — and requiring the
+  two to disagree about whether one filing was on time. The extension is
+  applied by the real `applyExtension`, not a hand-written ObligationChange:
+  a fixture that invents the shape of the record it later reads proves only
+  that the test agrees with itself.
+  Three real things the run found, none of them in the report code:
+  1. IAM04 refused the partner approving an invoice they drafted — the fixture
+     needed a separate FINANCE drafter, which is the rule working.
+  2. A TDS allocation must NOT name a receipt: money the client never sent
+     cannot have arrived in a bank account.
+  3. A fully settled invoice is not a receivable, so the first fixture (9000
+     cash + 1000 TDS against a 10000 invoice) vanished from the report exactly
+     as designed. Changed to leave 500 outstanding, and added an assertion that
+     the ageing bucket total equals the ledger balance.
+
+- 2026-09-10 — T17.7 — Routes and screens. `GET /api/reports` serves the
+  catalogue, a report, a drill and the CSV from ONE computation — an export
+  that runs its own query is an export that can disagree with the screen, and
+  "reconcile totals to an exported report" is then a property nobody holds.
+  `/reports` lists each report WITH its formula, because a partner choosing
+  which to open is exactly when the definition matters; a report the reader
+  lacks the capability for is omitted rather than greyed out, since a disabled
+  "Receivables ageing" still discloses that this practice has receivables.
+  `/reports/[reportId]` leads with scope, status basis, refresh time and record
+  count and only then the figures, renders an absent value as the WORDS "Not
+  available" in body size (never a dash, an empty cell or 0%), and shows the
+  reason underneath. The rows are the drill-through, recomputed under the
+  reader's own authority on each load.
+  The `/reports` NAV01 pin in ux.ts is ON now that the destination exists, and
+  `dev:walk`'s "not built yet" list is empty for the first time.
+  Verified over HTTP, not just built: all four report screens render 200
+  (`npm run dev:walk`), the CSV comes back as text/csv with its formula, status
+  basis, date policy and record count in the header block, and the same screen
+  shows a genuine 0.0% for a practice with unfiled obligations and "Not
+  available" for one with nothing due — which is the distinction REP01 exists
+  for, on a real page.
+
+- 2026-09-11 — T17.8 — Full regression, two passes as this machine requires.
+  Pass 1, dev server up: T02 13, T03 23, T04 37, T05 54, T06 44, T07 55 = 226,
+  plus T16 86 (it needs the server and is not in `npm test`).
+  Pass 2, dev server stopped: T08 55, T09 60, T10 56, T11 110, T12 106, T13 61,
+  T14 46, T15 50, T17 46 = 590.
+  **902 assertions, 0 failed.** Lint clean.
+  One assertion had to be INVERTED rather than fixed: t16 asserted that a
+  manager sees NO Reports pin "while /reports is unbuilt". T17 built it and
+  turned the pin on, so the assertion now requires the pin to be present. The
+  menu-href walk immediately below it is what keeps the pin and the screen
+  honest about each other, and it went green without change.
+
+### T17 — COMPLETE (2026-09-11)
+
+All eight micro-steps done, parent box checked. Evidence exercised, not just
+built: `npm run test:t17` 46/46, full regression 902/902, and all four report
+screens rendered 200 with the CSV fetched over HTTP.
+
+Both §40 evidence sentences pass. The drill returns the records behind a
+figure and the export reconciles to it literally (`[numerator / denominator]`
+compared against the measure). The extension leg runs the SAME report twice —
+once now, once as-at an instant before `applyExtension` ran — and requires the
+two to disagree about whether one filing was on time.
+
+Built: REP01's filter surface resolved server-side (branch, team and client ids
+are each checked to belong to a permitted practice, because an id pasted into a
+query string is otherwise a route across the boundary); every figure carrying
+its formula, scope, status basis, refresh time and record count; `ratio()` as
+the only way to build a proportion, returning `value: null` with a stated
+reason when the denominator is empty; the four §40 metrics R0 data supports;
+drill-through that re-runs the report under the caller's authority rather than
+trusting an id list; a CSV built from the same result object the screen renders.
+
+Known limits carried forward (none block T17):
+- Three of §40's seven metrics are NOT built and are not stubbed: time
+  utilisation needs a defined capacity, engagement economics a recognised
+  revenue basis and WIP, practice quality the R1 monitoring records. Each is a
+  registry entry when its data exists.
+- REP02 (combined reports with an elimination rule) and REP03 (targets and
+  baseline) are R1. The shell already reports which practices a combined run
+  covered, which is the part REP02 will build on.
+- No chart. §40 says "drill from a chart"; the drill is proven from the figure
+  and its rows, which is the same authorisation path a chart would use, but the
+  visual itself is not built.
+- Reports are computed live on every load. No caching, no scheduled refresh —
+  fine at this data size, and the refresh time on screen is therefore always
+  honest, but a larger practice will want the §41 performance targets checked.
+- The `serviceCode`, `branchId`, `teamId` and `ownerUserId` filters are
+  validated and scoped but only `ownerUserId` is actually consumed by a metric
+  (work and review ageing). The others are accepted and ignored by the four
+  reports built so far.
+
 ### T15 — COMPLETE (2026-09-10)
 
 All eight micro-steps done, parent box checked. Evidence exercised, not just
@@ -1334,44 +1463,47 @@ Known limits carried forward (none of them block T13):
 
 ---
 
-## SESSION HANDOFF (2026-09-10, end of session)
+## SESSION HANDOFF (2026-09-11, end of the T17 session)
 
-**State (updated end of the T15 session): 15 of 18 R0 tasks complete, plus
-T16 substantially built.** T15 is done — the handoff text below it was written
-before T15 and describes it as the next task; read the T15 section above for
-what actually landed. The next unstarted task is **T17 — Reports shell
-(REP01, PRD §40)**, and turning the `/reports` NAV01 pin back on in `ux.ts` is
-part of it (as `/billing` was for T14). Then **T18 — Backup & recovery**, and
-T16's outstanding manual browser pass.
+**State (updated end of the T17 session): 16 of 18 R0 tasks complete.**
+T01-T15 and T17 are done and tested. T16 is `[~]` for ONE reason only — the
+physical browser pass (keyboard, 200% zoom, both themes) has never been done,
+because the Chrome extension is not connected here; everything else in T16
+passes, including the invoice-issue leg added this session. T06 is done except
+its independent penetration test, which needs an external reviewer.
 
-**Superseded, kept for the detail:**
-T01-T05 and T07-T14 fully done and tested. T06 is done except for an
-independent penetration test, which needs an external reviewer and blocks
-release per SEC01. T16 was built out of order at the owner's request and is
-still `[~]` — see the T16 BLOCKER section above.
+The only R0 task never started is **T18 — Backup & recovery (BCP01-04, BCP06,
+PRD §37)**. After that: T16's browser pass, T06's pen test, then R0's exit gate
+— PRD §6 plus the full §42 acceptance scenario table — before any R1 work or
+`TASKS-R1.md`.
 
-R0 remaining: **T15** (API contracts & concurrency), **T16** (finish), **T17**
-(reports shell), **T18** (backup & recovery), plus T06's pen test. R1 and R2
-have not been started at all.
+T16 was built out of order at the owner's request — see the T16 BLOCKER
+section above for that history; its blocker is long cleared and only the
+browser pass remains. R1 and R2 have not been started at all.
 
 ### To resume in a fresh session
 
 1. Read this file + SPEC.md + TASKS.md (the project-builder skill does this
    automatically). Do NOT re-read PRD.md end to end.
-2. The next unstarted task in order is **T17 — Reports shell, REP01
-   (PRD §40)**: filtered reports that state their refresh time, formula
-   definition and record count, where an empty denominator reads
-   "Not available" and never a silent zero.
-   Two things that belong to T17 and are easy to miss:
-   - Turn the `/reports` NAV01 pin back on in `src/lib/ux.ts` (`built: false`
-     today). T14 did the same for `/billing`. The t16 test walks every href in
-     the rendered menu and requires a 200, so the pin cannot be turned on
-     before the screen exists.
-   - T16.9's manual browser pass (keyboard only, 200% zoom, both themes) is
-     still outstanding and needs a person at a browser, not a test.
-   After T17: **T18 — Backup & recovery** (BCP01-04, BCP06), then R0's exit
-   gate — PRD §6 plus the full §42 acceptance scenario table — before any R1
-   work or `TASKS-R1.md`.
+2. The next unstarted task is **T18 — Backup & recovery, BCP01-04 and BCP06
+   (PRD §37)**: encrypted backups in a separate failure domain, RPO ≤1 hr and
+   RTO ≤8 hr targets, restore reconciliation, a quarterly restore drill.
+   *Test: restore a synthetic production copy into an isolated environment with
+   external sending disabled; verify a random sample of file hashes,
+   permissions and receipt balances.*
+   Useful head starts already in the tree:
+   - Document bytes live in MinIO with a sha256 on every `DocumentVersion`, so
+     "verify a random sample of file hashes" has something to verify against.
+   - `settlementOf()` (T14) already computes a receipt balance from
+     allocations, so the restore check can reconcile against the real
+     computation rather than a second implementation of it.
+   - "External sending disabled" needs a real switch. T12's outbound
+     communication and T15's `dispatchOutbox` are the two paths that reach
+     outside; neither has an environment-level kill switch yet, and inventing
+     one per module during a restore drill is how a test email reaches a
+     client.
+   Still outstanding elsewhere, both needing a person rather than code:
+   T16's browser pass and T06's independent penetration test.
 3. Bring the environment up:
    ```
    docker compose up -d db redis minio     # Postgres, Redis, MinIO
@@ -1392,12 +1524,13 @@ have not been started at all.
    stopped and use `npm run dev`. If `next dev` reports "Another next dev
    server is already running" it prints the PID; `taskkill /PID <pid> /F`, or
    just point the tests at the port it names with `BASE_URL=http://localhost:<port>`.
-4. Verify nothing has drifted: `npm test` (runs T02-T15, 770 assertions).
+4. Verify nothing has drifted: `npm test` (runs T02-T15 and T17, 816
+   assertions).
    On this memory-constrained machine run it in two passes — T02-T07 with
-   `npm run dev` up, then T08-T15 with it stopped. Running all fourteen with
-   the dev server live ran the host out of memory and killed T08.
-   T16 (73 assertions) is NOT in `npm test` and needs the dev server; run
-   `npm run test:t16` separately.
+   `npm run dev` up, then T08-T15 and T17 with it stopped. Running them all
+   with the dev server live ran the host out of memory and killed T08.
+   T16 (86 assertions) is NOT in `npm test` and needs the dev server; run
+   `npm run test:t16` separately. Full green is 902 across all three groups.
 
 ### Things that will bite you if you don't know them
 

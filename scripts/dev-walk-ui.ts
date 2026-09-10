@@ -163,16 +163,22 @@ async function main() {
     [obligation ? `/obligations/${obligation.id}` : "", "Obligation detail"],
     ["/billing", "Billing"],
     [invoice ? `/billing/${invoice.id}` : "", "Invoice detail"],
+    ["/reports", "Reports"],
+    ["/reports/on-time-filing-rate", "Report — on time filing"],
+    ["/reports/receivables-ageing", "Report — receivables ageing"],
+    // A report id that does not exist must render the empty state, not a 500.
+    ["/reports/not-a-real-report", "Report — unknown id"],
   ];
 
   /**
    * Destinations that deliberately do not exist yet. They are NOT in the menu
    * (ux.ts marks them built:false), so a user cannot reach them — they are
    * listed here so the gap stays visible rather than being forgotten.
+   *
+   * Empty since T17 turned the Reports pin on. Leave the block: the next
+   * withheld destination goes here rather than being remembered.
    */
-  const notBuiltYet: [string, string][] = [
-    ["/reports", "Reports — T17 (REP01)"],
-  ];
+  const notBuiltYet: [string, string][] = [];
 
   let broken = 0;
   for (const [path, label] of routes) {

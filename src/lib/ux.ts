@@ -96,13 +96,14 @@ const PINNED_NAV: {
     built: true,
   },
   {
-    // T17 — REP01. A reports pin needs a reports screen that can state its
-    // refresh time, formula and record count; a stub that cannot would break
-    // the requirement it is meant to satisfy.
+    // T17 — REP01. The pin was withheld until a reports screen existed that
+    // could state its refresh time, formula and record count; a stub that
+    // could not would have broken the requirement it was meant to satisfy.
+    // It exists now, so the pin is on.
     item: { href: "/reports", label: "Reports", pinned: true },
     requires: "export.run",
     roles: ["MANAGER", "PRACTICE_PARTNER", "GROUP_OWNER"],
-    built: false,
+    built: true,
   },
   {
     item: { href: "/review", label: "Review queue", pinned: true },

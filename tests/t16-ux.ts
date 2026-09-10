@@ -354,13 +354,14 @@ async function main() {
     "...but NOT Billing — that is Finance's pin, not a manager's",
     !managerHome.html.includes('href="/billing"'),
   );
-  // NAV01's Reports pin is a manager's by right, but /reports is T17 and does
-  // not exist. A menu entry that leads to a 404 tells the user a capability is
-  // there and then strands them, so the pin is withheld until the screen
-  // exists. ux.ts keeps the entry with built:false and names the task.
+  // NAV01's Reports pin is a manager's by right. It was withheld while
+  // /reports did not exist — a menu entry that leads to a 404 tells the user a
+  // capability is there and then strands them. T17 built the screen and turned
+  // the pin on, so the assertion inverted with it; the href walk below is what
+  // keeps the two honest about each other.
   check(
-    "...and no Reports pin while /reports is unbuilt (T17)",
-    !managerHome.html.includes('href="/reports"'),
+    "...and the Reports pin, now that T17 has built the screen",
+    managerHome.html.includes('href="/reports"'),
   );
 
   /**

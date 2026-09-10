@@ -587,9 +587,50 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
     200%, a state distinguished by colour alone — rather than restating the
     structural assertions t16-ux.ts already makes.
 
-- [ ] **T17 — Reports shell.** Implement REP01 (PRD §40): filtered
+- [x] **T17 — Reports shell.** Implement REP01 (PRD §40): filtered
   reports with refresh time, formula definition, record count; empty
   denominators show "Not available", never silently zero.
+  *Test (PRD §40 acceptance evidence): drill from a chart to its underlying
+  authorised records and reconcile totals to an exported report; a deadline
+  extension applies the documented current date policy while retaining a
+  historical snapshot for prior reports.*
+  REP02 (combined reports) and REP03 (targets/baseline) are R1 and deferred.
+  Of the seven metrics in §40's table, only four are computable from R0 data:
+  time utilisation needs defined capacity, engagement economics needs a
+  recognised-revenue basis and WIP, and practice quality needs the audit /
+  monitoring records — all R1. The shell must make adding them later a
+  registry entry, not a rewrite.
+  - [x] T17.1 — `src/lib/reports.ts`: the shell. A report definition carries
+    its id, title, FORMULA TEXT (REP01 shows it — a number whose definition
+    is not on screen cannot be argued with), the permission it requires, the
+    filters it accepts, and a `run()` returning refreshedAt, recordCount and
+    a result whose denominator may be ABSENT. Absent is `null` and renders
+    "Not available"; it is never coerced to 0.
+  - [x] T17.2 — Filters resolved server-side (REP01): permitted practice,
+    branch, team, service, owner, client, period. Practice scope comes from
+    the membership guard, never from the query string alone.
+  - [x] T17.3 — The four R0 metrics: on-time filing rate (unknown / disputed
+    in their own bucket, never folded into either side of the ratio), work
+    and review ageing (client waiting and internal waiting kept apart),
+    document completeness (accepted ÷ applicable, with received as a separate
+    measure), receivables ageing (issued less approved receipts, tax
+    deductions, credits and credit notes, aged from the invoice due date).
+  - [x] T17.4 — Drill-through + export reconciliation: every figure resolves
+    to the record IDs behind it, RE-AUTHORISED at drill time rather than
+    trusting the aggregate's scope, and the export totals equal the figures
+    on screen.
+  - [x] T17.5 — The current-date policy and the historical snapshot: a report
+    for a prior period uses the statutory date AS IT STOOD, reconstructed
+    from `ObligationChange`, while a live report uses
+    `currentStatutoryDate`. The policy is stated on the report, not implied.
+  - [x] T17.6 — Acceptance test `tests/t17-reports.ts`, WRITTEN AND RUN
+    BEFORE the routes and screens (the T13/T14/T15 lesson), covering both
+    §40 evidence sentences plus a control for each safeguard.
+  - [x] T17.7 — API routes + `/reports` screens with the five NAV03 states,
+    and turn the `/reports` NAV01 pin back on in `src/lib/ux.ts`
+    (`built: false` today — t16 walks every menu href and requires a 200, so
+    the pin cannot go on before the screen exists).
+  - [x] T17.8 — Run the acceptance test + full regression suite.
 
 - [ ] **T18 — Backup & recovery.** Implement BCP01-04, BCP06 (PRD §37):
   encrypted backups in a separate failure domain, RPO ≤1hr/RTO ≤8hr

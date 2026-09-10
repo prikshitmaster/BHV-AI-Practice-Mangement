@@ -1000,3 +1000,84 @@ h3 {
     padding-right: var(--space);
   }
 }
+
+/* ------------------------------------------------------------ reports */
+
+/* REP01: the definition, scope, basis, refresh time and record count travel
+   WITH the figure. They are laid out as a definition list because that is what
+   they are — and because a screen reader then announces each label with its
+   value instead of reading a run of unattached strings. */
+.definition-list {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: 8px var(--space);
+  margin: 0 0 var(--space);
+  padding: var(--space);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  font-size: var(--font-table);
+}
+.definition-list > div {
+  display: contents;
+}
+.definition-list dt {
+  color: var(--text-secondary);
+  font-weight: 650;
+}
+.definition-list dd {
+  margin: 0;
+}
+
+.measure-list {
+  list-style: none;
+  margin: 0 0 var(--space);
+  padding: 0;
+  display: grid;
+  gap: var(--space);
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+.measure {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+.measure-label {
+  color: var(--text-secondary);
+  font-size: var(--font-table);
+}
+.measure-value {
+  font-size: 28px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* An unavailable figure must not read as a small or bad number. It is set at
+   body size, in the muted colour, and in words — never 0%, never a dash. UX04:
+   the colour is a second channel here, not the only one, because the VALUE
+   itself already says "Not available". */
+.measure-value--absent {
+  font-size: var(--font-body);
+  font-weight: 650;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* At 200% zoom the measure grid must collapse to one column rather than
+   letting a 28px figure force a horizontal scroll (§38). */
+@media (max-width: 600px) {
+  .definition-list {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .definition-list dd {
+    margin-bottom: 8px;
+  }
+  .measure-list {
+    grid-template-columns: 1fr;
+  }
+}

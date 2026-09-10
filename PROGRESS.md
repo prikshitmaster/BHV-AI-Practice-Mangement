@@ -1150,22 +1150,34 @@ Known limits carried forward (none of them block T13):
 
 ---
 
-## SESSION HANDOFF (2026-09-10)
+## SESSION HANDOFF (2026-09-10, end of session)
 
-**State: 13 of 18 R0 tasks complete, plus T16 substantially built.**
-T01-T05 and T07-T13 fully done. T06 is done except for an independent
-penetration test, which needs an external reviewer. T16 was built out of
-order at the owner's request and is `[~]` — see the T16 BLOCKER section
-above.
+**State: 14 of 18 R0 tasks complete, plus T16 substantially built.**
+T01-T05 and T07-T14 fully done and tested. T06 is done except for an
+independent penetration test, which needs an external reviewer and blocks
+release per SEC01. T16 was built out of order at the owner's request and is
+still `[~]` — see the T16 BLOCKER section above.
+
+R0 remaining: **T15** (API contracts & concurrency), **T16** (finish), **T17**
+(reports shell), **T18** (backup & recovery), plus T06's pen test. R1 and R2
+have not been started at all.
 
 ### To resume in a fresh session
 
-1. Read this file + SPEC.md + TASKS.md (the project-builder skill does
-   this automatically).
-2. The next unstarted task in order is **T14 — Fees & invoicing core,
-   FIN01/FIN02/FIN04 (PRD §25)**; FIN03, FIN05 and FIN06 are R1. T14 is
-   also what finally unblocks T16's third acceptance leg, so doing T14
-   before returning to the T16 blocker is the cheaper order.
+1. Read this file + SPEC.md + TASKS.md (the project-builder skill does this
+   automatically). Do NOT re-read PRD.md end to end.
+2. The next unstarted task in order is **T15 — API contracts & concurrency,
+   API01-03 (PRD §34)**: server-side auth on every endpoint, optimistic
+   version checks, outbox-pattern event reliability.
+   *Test: two reviewers approve different versions simultaneously — only the
+   current version can be approved; two invoice-issue clicks create one
+   invoice.*
+   Useful head start: T14 already proved half of that second clause. Its
+   `issueInvoice` claims the invoice row BEFORE allocating a number, and
+   `tests/t14-billing.ts` asserts both that two simultaneous issues take two
+   different numbers and that a stale issue burns none. T15's job is to make
+   that property general rather than per-module — the outbox is the genuinely
+   new part, and nothing in the codebase implements one yet.
 3. Bring the environment up:
    ```
    docker compose up -d db redis minio     # Postgres, Redis, MinIO
@@ -1173,16 +1185,34 @@ above.
    npm run dev                              # only needed for T03/T06/T07
    ```
    Check MinIO actually published its ports — `docker ps` should show
-   `0.0.0.0:9000->9000`, not a bare `9000/tcp`. A container created before
-   the `ports:` block existed keeps running without them, and every object
-   call then fails STORE_UNREACHABLE against a container reporting healthy.
+   `0.0.0.0:9000->9000`, not a bare `9000/tcp`. A container created before the
+   `ports:` block existed keeps running without them, and every object call
+   then fails STORE_UNREACHABLE against a container reporting healthy.
    Fix: `docker compose up -d --force-recreate minio`.
-4. Verify nothing has drifted: `npm test` (runs T02-T13, 674 assertions).
+   If `docker compose` cannot reach the daemon at all, Docker Desktop is not
+   running — start it and wait, the containers come back by themselves.
+4. Verify nothing has drifted: `npm test` (runs T02-T14, 720 assertions).
    On this memory-constrained machine run it in two passes — T02-T07 with
-   `npm run dev` up, then T08-T13 with it stopped. Running all twelve with
+   `npm run dev` up, then T08-T14 with it stopped. Running all thirteen with
    the dev server live ran the host out of memory and killed T08.
 
 ### Things that will bite you if you don't know them
+
+- **Write the acceptance test BEFORE the routes and screens, not after.**
+  T13 was built end to end and typechecked before a single line ran; T14
+  reversed the order and the test immediately found three real defects
+  (a nested create Prisma refuses, a unique constraint that allowed only one
+  draft invoice per series, and a status never re-derived). Both tasks passed
+  in the end — the difference was how much was built on top of the bug first.
+- **`tsc` does not catch a Prisma `create` that names a column which does not
+  exist**, nor one that omits a required field. It caught the bad enum VALUES
+  in the T13 fixture and nothing else. A fixture that typechecks can still be
+  fiction; only running it proves the shape.
+- **Do not trust a bare rtk lint summary.** `npx eslint` printed
+  "Lint: 2 errors, 2 warnings" for a run whose underlying eslint invocation had
+  failed to start. `node ./node_modules/eslint/bin/eslint.js <paths>` scanned
+  the same 9 files and found nothing. Same caution for any rtk-wrapped output
+  that disagrees with what you expect — re-run the tool directly.
 
 - **Restart `npm run dev` after every `prisma generate`.** Turbopack
   caches the generated client and a stale copy fails with a bare HTTP

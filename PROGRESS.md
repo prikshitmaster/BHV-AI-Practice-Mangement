@@ -877,73 +877,100 @@ To finish T16 next session:
   IS filed as its own original) so none of them can pass with the mechanism
   switched off. Needs MinIO up — it writes real objects.
 
-### T13 — RESUME HERE (session ended 2026-09-10, work paused mid-T13.7)
+- 2026-09-10 — T13.7 — `npm run test:t13` RUN for the first time: **61
+  passed, 0 failed**, covering all three PRD §17 evidence points (CFO
+  switches between two approved entities and cannot see a third; expired /
+  used / unknown invitations are indistinguishable and name no client;
+  interrupted upload resumes leaving exactly one original). Two fixture bugs
+  fixed to get there, both in the test, none in the portal code:
+  `obligationRule.create` used fields that do not exist on the model
+  (`formCode`/`practiceId`/`description`) — replaced with the real
+  `code`/`source`/`applicability` shape as used in t09; and `governingLaw:
+  "GST"` + `status: "PENDING"` were not members of `GoverningLaw` /
+  `ObligationStatus` — now `CGST_ACT_2017` / `OPEN`. Note `tsc` did NOT
+  catch the unknown-field case (Prisma 7's create input does not
+  excess-property-check), only the two enum values; a fixture that names a
+  nonexistent column still typechecks and fails at runtime.
+  `pdfBytes()` passed intake unchanged — the synthetic PDF was not the
+  problem it was flagged as. Also fixed the environment, not the code: the
+  running `minio` container had been created without published ports
+  (`9000-9001/tcp`, no host binding), so `ensureBucket` failed
+  STORE_UNREACHABLE despite a healthy container —
+  `docker compose up -d --force-recreate minio` republished them.
+  — tested against PRD §17 acceptance evidence — PASS
 
-T13 is `[~]`. T13.1-T13.6 are done, typecheck and eslint clean throughout.
-NOTHING in T13 has been executed yet — no test has run, no screen has been
-loaded in a browser. Treat every claim above as "written and typechecked",
-not "working".
+- 2026-09-10 — T13.8 — Full regression, two passes on this machine as the
+  memory constraint requires. Pass 1 with the dev server up: T02 13, T03 23,
+  T04 37, T05 54, T06 44, T07 55 = 226. Pass 2 with it stopped: T08 55,
+  T09 60, T10 56, T11 110, T12 106, T13 61 = 448. **674 assertions, 0
+  failed.** T13 introduced no regression in any earlier module — notably
+  T11/T12, whose document-intake and client-request paths the portal reuses
+  rather than forks. — PASS
 
-Next steps, in order:
-1. `docker compose up -d db redis minio` — T13 needs MinIO, like T11.
-2. `npm run test:t13` and fix what it finds. Expect real failures on first
-   contact; nothing here has been exercised.
-   Specific things most likely to be wrong, since they were never run:
-   - `pdfBytes()` in the test builds a synthetic PDF. `assessUpload` sniffs
-     content, so if it rejects the filler the whole EVIDENCE-3 section fails
-     at intake rather than at the thing being tested. Check the verdict first.
-   - `ObligationRule` is created with an explicit `id`; confirm that field is
-     writable and the required columns are all present.
-   - The `Obligation` fixture sets `status: "PENDING"` — confirm that value
-     exists in ObligationStatus.
-3. Then T13.8: full regression (`npm test`), TWO passes on this machine —
-   T02-T07 with the dev server up, T08-T13 with it stopped. Warm the dev
-   server before believing a T03/T06/T07 failure (cold-compile flakiness is
-   recorded above).
-4. Only then check T13's own box.
+- 2026-09-10 — T13.9 — `scripts/portal-walk.ts` + `npm run portal:walk`:
+  the portal twin of `dev:walk`, which could never cover /portal because it
+  signs in as STAFF. Seeds a fictional CFO holding two of three entities,
+  redeems a real invitation through the real POST route, then FETCHES every
+  portal screen: sign-in, help (signed out and in), home, guided upload, the
+  home API, and the state after logout. **23 passed, 0 failed** — every T13.6
+  screen renders; none had ever been loaded before. The third entity appears
+  nowhere in the rendered home HTML, the internal owner is not in the markup,
+  the unverified support desk is absent from help, and portal sign-in sets
+  `bhv_portal_session` without ever setting `bhv_session`. This also closes
+  the "no way to click through the portal by hand" gap: the script prints a
+  working single-use sign-in URL (console only, never written to a file in
+  this repo). — tested against PRD §17 POR01/POR02/POR05 as rendered — PASS
 
-Not yet done for T13, and not started:
-- No portal screen has been opened in a browser. `npm run dev:walk` does NOT
-  cover /portal — it signs in as STAFF, and the portal is a separate
-  authentication world by design. A portal equivalent needs writing, or the
-  screens need a manual pass.
-- No seed helper creates a portal contact, so there is no way to click through
-  the portal by hand yet. `scripts/seed-demo-data.ts` creates contacts but no
-  ContactAuthority grants and no PortalInvitation.
-- `PracticeSupportContact` has no admin UI; rows must be inserted by hand.
+### T13 — COMPLETE (2026-09-10)
+
+All nine micro-steps done and the parent box checked. Evidence actually
+exercised, not merely built: `npm run test:t13` 61/61, full regression
+674/674 in two passes, `npm run portal:walk` 23/23 against rendered screens.
+
+Known limits carried forward (none of them block T13):
+- `PracticeSupportContact` has no admin UI; rows must be inserted by hand or
+  by `portal:walk`. POR05 needs a verified route to exist, so a real
+  deployment needs this before the portal is usable.
+- `scripts/seed-demo-data.ts` still creates no ContactAuthority grants and no
+  PortalInvitation — `portal:walk` is now the way to get a portal login.
+- No screen has been driven in a real browser (fetch-level only), so the
+  client-side JS in the uploader and the entity switcher is covered by
+  t13-portal at library level but not in a DOM.
 - T13 deliberately does not touch POR04 (approvals) or POR06 (external
   experts) — both R1.
 
 ---
 
-## SESSION HANDOFF (2026-09-09)
+## SESSION HANDOFF (2026-09-10)
 
-**State: 12 of 18 R0 tasks complete, plus T16 substantially built.**
-T01-T05 and T07-T12 fully done. T06 is done except for an independent
+**State: 13 of 18 R0 tasks complete, plus T16 substantially built.**
+T01-T05 and T07-T13 fully done. T06 is done except for an independent
 penetration test, which needs an external reviewer. T16 was built out of
 order at the owner's request and is `[~]` — see the T16 BLOCKER section
-above, which is the first thing to read next session.
+above.
 
 ### To resume in a fresh session
 
 1. Read this file + SPEC.md + TASKS.md (the project-builder skill does
    this automatically).
-2. **First, deal with the T16 blocker above** — a concurrent session was
-   editing this repo and owns the dev server; `tests/t16-ux.ts` has never
-   been run green, and several menu destinations 404.
-3. Then the next unstarted task in order is **T13 — Client portal,
-   POR01-03, POR05 (PRD §17)**; POR04 (approvals) and POR06 (external
-   experts) are R1. T14 and T15 follow, and T14 is what finally unblocks
-   T16's third acceptance leg.
+2. The next unstarted task in order is **T14 — Fees & invoicing core,
+   FIN01/FIN02/FIN04 (PRD §25)**; FIN03, FIN05 and FIN06 are R1. T14 is
+   also what finally unblocks T16's third acceptance leg, so doing T14
+   before returning to the T16 blocker is the cheaper order.
 3. Bring the environment up:
    ```
    docker compose up -d db redis minio     # Postgres, Redis, MinIO
    npx prisma migrate deploy                # if any migration is pending
    npm run dev                              # only needed for T03/T06/T07
    ```
-4. Verify nothing has drifted: `npm test` (runs T02-T12, 613 assertions).
+   Check MinIO actually published its ports — `docker ps` should show
+   `0.0.0.0:9000->9000`, not a bare `9000/tcp`. A container created before
+   the `ports:` block existed keeps running without them, and every object
+   call then fails STORE_UNREACHABLE against a container reporting healthy.
+   Fix: `docker compose up -d --force-recreate minio`.
+4. Verify nothing has drifted: `npm test` (runs T02-T13, 674 assertions).
    On this memory-constrained machine run it in two passes — T02-T07 with
-   `npm run dev` up, then T08-T12 with it stopped. Running all eleven with
+   `npm run dev` up, then T08-T13 with it stopped. Running all twelve with
    the dev server live ran the host out of memory and killed T08.
 
 ### Things that will bite you if you don't know them

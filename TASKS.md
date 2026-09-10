@@ -408,7 +408,7 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
     three PRD evidence points + the safeguards.
   - [x] T12.9 — Run the acceptance test + full regression suite.
 
-- [~] **T13 — Client portal.** Implement POR01-03, POR05 (PRD §17):
+- [x] **T13 — Client portal.** Implement POR01-03, POR05 (PRD §17):
   portal home, contact authority with entity switcher, guided upload.
   Defer POR04 (approvals) and POR06 (external experts) to R1.
   *Test: a group CFO switches between two approved client entities and
@@ -436,9 +436,13 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
   - [x] T13.6 — Portal screens: home + entity switcher, guided upload,
     invitation accept, expired-link recovery, support contact from
     owner-configured firm details. Mobile responsive (POR05).
-  - [~] T13.7 — Acceptance test `tests/t13-portal.ts` covering the three
+  - [x] T13.7 — Acceptance test `tests/t13-portal.ts` covering the three
     PRD evidence points + the isolation safeguards.
-  - [ ] T13.8 — Run the acceptance test + full regression suite.
+  - [x] T13.8 — Run the acceptance test + full regression suite.
+  - [x] T13.9 — Render pass: seed a portal contact + invitation and load
+    every portal screen over HTTP (`npm run portal:walk`). The T13.6
+    screens have never been rendered; a screen that 404s or throws on
+    render would pass every library-level test above.
 
 ## Phase 5 — Billing register (R0 subset)
 

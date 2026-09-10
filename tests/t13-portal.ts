@@ -594,15 +594,13 @@ async function main() {
   );
 
   // Obligation dates: the agreed ones only.
-  await prisma.obligationRule.create({
+  const obligationRule = await prisma.obligationRule.create({
     data: {
-      id: `rule-${RUN}`,
-      practiceId: practice.id,
-      formCode: "GSTR-9",
+      code: tag("GSTR9"),
       version: 1,
-      status: "ACTIVE",
-      governingLaw: "GST",
-      description: "Annual return",
+      source: "CGST Act (fictional reference)",
+      governingLaw: "CGST_ACT_2017",
+      applicability: {} as never,
       effectiveFrom: d("2024-04-01"),
     },
   });
@@ -610,7 +608,7 @@ async function main() {
     data: {
       practiceId: practice.id,
       clientRelationshipId: relA.id,
-      ruleId: `rule-${RUN}`,
+      ruleId: obligationRule.id,
       ruleVersion: 1,
       periodKey: "FY2025-26",
       originalStatutoryDate: d("2099-12-31"),
@@ -618,7 +616,7 @@ async function main() {
       clientDocumentCutoff: d("2099-11-30"),
       internalTargetDate: d("2099-10-15"),
       reviewTargetDate: d("2099-11-15"),
-      status: "PENDING",
+      status: "OPEN",
     },
   });
 

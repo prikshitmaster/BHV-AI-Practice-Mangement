@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { requestInvitationRenewal } from "@/lib/portal-auth";
 
@@ -22,10 +22,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const token = String(body.token ?? "").trim();
     if (!token) {
-      return NextResponse.json(
-        { error: "Paste the link you were sent so we can renew it.", code: "NO_TOKEN" },
-        { status: 400 },
-      );
+      return badRequest("Paste the link you were sent so we can renew it.", "NO_TOKEN");
     }
 
     const result = await requestInvitationRenewal({ token });

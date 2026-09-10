@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { errorResponse, notFound } from "@/lib/api";
 import { assertPracticeAccess } from "@/lib/practice-scope";
 import { can, resolveMembership } from "@/lib/permissions";
 
@@ -67,11 +67,11 @@ export async function GET(
     });
 
     // Unknown and forbidden are indistinguishable.
-    if (!relationship) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!relationship) return notFound();
 
     await assertPracticeAccess(userId, relationship.practiceId);
     const membership = await resolveMembership(userId, relationship.practiceId);
-    if (!membership) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!membership) return notFound();
 
     // Each tab is gated independently — a tab the caller cannot see is
     // reported as unavailable rather than returned empty, so the UI can say

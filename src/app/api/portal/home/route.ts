@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { apiError, errorResponse } from "@/lib/api";
 import { requirePortalContact } from "@/lib/portal-session";
 import { listPortalEntities, loadPortalHome } from "@/lib/portal";
 
@@ -24,10 +24,7 @@ export async function GET(request: Request) {
       practiceId: actor.practiceId,
     });
     if (entities.length === 0) {
-      return NextResponse.json(
-        { error: "Not found", code: "NO_ENTITIES" },
-        { status: 404 },
-      );
+      return apiError(404, "NO_ENTITIES", "Not found");
     }
 
     // An unrecognised entity id falls back to the first the contact holds,

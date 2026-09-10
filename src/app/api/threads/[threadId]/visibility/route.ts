@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { commitVisibilityChange, previewVisibilityChange } from "@/lib/communication";
 
@@ -24,10 +24,7 @@ export async function POST(
     const body = await request.json();
 
     if (!body.practiceId || !body.toVisibility) {
-      return NextResponse.json(
-        { error: "practiceId and toVisibility are required", code: "BAD_REQUEST" },
-        { status: 400 },
-      );
+      return badRequest("practiceId and toVisibility are required", "BAD_REQUEST");
     }
 
     return NextResponse.json(
@@ -55,13 +52,7 @@ export async function PUT(
     const body = await request.json();
 
     if (!body.practiceId || !body.previewId || body.expectedVersion === undefined) {
-      return NextResponse.json(
-        {
-          error: "practiceId, previewId and expectedVersion are required",
-          code: "BAD_REQUEST",
-        },
-        { status: 400 },
-      );
+      return badRequest("practiceId, previewId and expectedVersion are required", "BAD_REQUEST");
     }
 
     return NextResponse.json(

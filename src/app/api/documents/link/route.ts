@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { errorResponse, notFound } from "@/lib/api";
 import { redeemAccessToken } from "@/lib/documents";
 import { getObject } from "@/lib/object-store";
 
@@ -18,14 +18,14 @@ export async function GET(request: Request) {
   try {
     const token = new URL(request.url).searchParams.get("t");
     if (!token) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return notFound();
     }
 
     const link = await redeemAccessToken({ token });
     const bytes = await getObject(link.storageObjectId);
 
     if (!bytes) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return notFound();
     }
 
     return new NextResponse(new Uint8Array(bytes), {

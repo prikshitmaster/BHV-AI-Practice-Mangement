@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { assertPracticeAccess } from "@/lib/practice-scope";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { checkForDuplicates } from "@/lib/client-registry";
 import { prisma } from "@/lib/prisma";
@@ -26,10 +26,7 @@ export async function POST(request: Request) {
     };
 
     if (!body.practiceId || !body.identifiers?.length) {
-      return NextResponse.json(
-        { error: "practiceId and at least one identifier are required" },
-        { status: 400 },
-      );
+      return badRequest("practiceId and at least one identifier are required");
     }
 
     await assertPracticeAccess(userId, body.practiceId);

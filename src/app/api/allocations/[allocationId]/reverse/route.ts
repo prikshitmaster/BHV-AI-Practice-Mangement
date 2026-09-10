@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse, notFound } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { requireUserId } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
@@ -25,10 +25,7 @@ export async function POST(
     const reason = String(body.reason ?? "").trim();
 
     if (!reason) {
-      return NextResponse.json(
-        { error: "A reason is required to reverse an allocation", code: "BAD_REQUEST" },
-        { status: 400 },
-      );
+      return badRequest("A reason is required to reverse an allocation", "BAD_REQUEST");
     }
 
     const allocation = await prisma.receiptAllocation.findUnique({
@@ -36,7 +33,7 @@ export async function POST(
       select: { practiceId: true },
     });
     if (!allocation) {
-      return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
+      return notFound();
     }
 
     const reversal = await reverseAllocation({

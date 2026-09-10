@@ -3632,3 +3632,89 @@ model PracticeSupportContact {
 
   @@index([practiceId, archivedAt])
 }
+
+// ---------------------------------------------------------------------------
+// API03 — transactional outbox (T15)
+// ---------------------------------------------------------------------------
+
+enum OutboxState {
+  PENDING
+  DISPATCHED
+  FAILED
+  DEAD
+}
+
+/// API03 "Commit important business events with the transaction through an
+/// outbox. Consumers are idempotent. Preserve action keys, retries, scheduled
+/// time and executed time. A failed external side effect does not roll back a
+/// valid approval into an unknown state."
+///
+/// The row is written by the SAME transaction that made the business change,
+/// so the event cannot exist without the change and the change cannot exist
+/// without the event. Delivery happens afterwards, outside that transaction —
+/// which is precisely why a dead SMTP server cannot un-approve an approval.
+model OutboxEvent {
+  id         String  @id @default(uuid())
+  tenantId   String?
+  practiceId String?
+
+  eventType String
+
+  /// The caller's idempotency key. Two clicks that mean the same intent carry
+  /// the same key, and the unique index — not application logic — is what
+  /// makes the second one a no-op. Nullable for events with no natural key.
+  actionKey String? @unique
+
+  /// The exact record version the event describes (API02/SEC04). An event
+  /// about version 3 must never be replayed against version 4.
+  subjectType    String
+  subjectId      String
+  subjectVersion Int?
+
+  payload Json
+
+  /// API01: the same ID the originating HTTP response carried, so a support
+  /// question about one response can be traced to its side effects.
+  correlationId String?
+
+  state    OutboxState @default(PENDING)
+  attempts Int         @default(0)
+  maxAttempts Int      @default(5)
+  lastError   String?
+
+  /// Preserved separately and never collapsed into one column: WHEN the event
+  /// became due, and WHEN it actually ran. A retry that succeeds an hour late
+  /// must still show that it was due an hour ago.
+  occurredAt   DateTime  @default(now())
+  scheduledFor DateTime  @default(now())
+  executedAt   DateTime?
+
+  /// Set while a dispatcher holds the row, so two dispatchers cannot both
+  /// deliver the same event.
+  claimedAt   DateTime?
+  claimedBy   String?
+
+  receipts OutboxConsumerReceipt[]
+
+  @@index([state, scheduledFor])
+  @@index([practiceId, subjectType, subjectId])
+}
+
+/// API03 "Consumers are idempotent." Idempotency is enforced here rather than
+/// trusted to each consumer: the receipt is inserted in the same transaction
+/// as the consumer's own work, so a consumer that has already run cannot run
+/// a second time even if the dispatcher redelivers.
+model OutboxConsumerReceipt {
+  id      String      @id @default(uuid())
+  eventId String
+  event   OutboxEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  consumer String
+
+  result    String
+  detail    String?
+  handledAt DateTime @default(now())
+
+  @@unique([eventId, consumer])
+  @@index([consumer, handledAt])
+}

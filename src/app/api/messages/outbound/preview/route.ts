@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { buildOutboundPreview } from "@/lib/communication";
 
@@ -23,13 +23,7 @@ export async function POST(request: Request) {
     const body = await request.json();
 
     if (!body.practiceId || !body.clientRelationshipId || !Array.isArray(body.contactIds)) {
-      return NextResponse.json(
-        {
-          error: "practiceId, clientRelationshipId and contactIds are required",
-          code: "BAD_REQUEST",
-        },
-        { status: 400 },
-      );
+      return badRequest("practiceId, clientRelationshipId and contactIds are required", "BAD_REQUEST");
     }
 
     return NextResponse.json(

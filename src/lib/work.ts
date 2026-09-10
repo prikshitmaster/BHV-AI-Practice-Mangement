@@ -22,6 +22,7 @@
 import type { WorkState, WorkSubjectType } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { recordEvent } from "@/lib/audit";
+import { emitEvent } from "@/lib/outbox";
 
 export class WorkError extends Error {
   readonly status = 409;
@@ -127,6 +128,25 @@ export async function transitionJob(params: {
         actorName: params.actorName,
         reason: params.reason,
         subjectVersion: next.version,
+      },
+    });
+
+    // API03: whatever a state change triggers — a client notification, a
+    // reminder that should now stop — is committed with the change itself, so
+    // it cannot be lost, and a delivery failure cannot undo the transition.
+    // Keyed on the version reached, so a retried transition emits nothing new.
+    await emitEvent(tx, {
+      eventType: "JOB_STATE_CHANGED",
+      subjectType: "Job",
+      subjectId: job.id,
+      subjectVersion: next.version,
+      practiceId: params.practiceId,
+      actionKey: `job-state:${params.practiceId}:${job.id}:${next.version}`,
+      payload: {
+        fromState: job.state,
+        toState: params.toState,
+        actorUserId: params.actorUserId,
+        reason: params.reason ?? null,
       },
     });
 

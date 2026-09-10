@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { assertPracticeAccess } from "@/lib/practice-scope";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { assertCsrf } from "@/lib/csrf";
+import { badRequest, errorResponse, notFound } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,9 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const userId = await requireUserId();
+    // SEC03: a session-authenticated mutating endpoint without this is
+    // CSRF-able — the cookie travels on a cross-site POST by itself.
+    await assertCsrf(request);
     const body = (await request.json()) as {
       sharingPracticeId?: string;
       receivingPracticeId?: string;
@@ -34,28 +38,16 @@ export async function POST(request: Request) {
       !body.purpose ||
       !body.expiresAt
     ) {
-      return NextResponse.json(
-        {
-          error:
-            "sharingPracticeId, receivingPracticeId, subjectType, subjectId, purpose and expiresAt are required",
-        },
-        { status: 400 },
-      );
+      return badRequest("sharingPracticeId, receivingPracticeId, subjectType, subjectId, purpose and expiresAt are required");
     }
 
     if (body.sharingPracticeId === body.receivingPracticeId) {
-      return NextResponse.json(
-        { error: "A practice cannot grant itself access" },
-        { status: 400 },
-      );
+      return badRequest("A practice cannot grant itself access");
     }
 
     const expiresAt = new Date(body.expiresAt);
     if (Number.isNaN(expiresAt.getTime()) || expiresAt <= new Date()) {
-      return NextResponse.json(
-        { error: "expiresAt must be a future date — grants cannot be open-ended" },
-        { status: 400 },
-      );
+      return badRequest("expiresAt must be a future date — grants cannot be open-ended");
     }
 
     // Only the owning practice may share, and the caller must be in it.
@@ -66,7 +58,7 @@ export async function POST(request: Request) {
         where: { id: body.subjectId, practiceId: body.sharingPracticeId },
         select: { id: true, versionNo: true },
       });
-      if (!owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      if (!owned) return notFound();
 
       // Pin the grant to the version that actually exists right now.
       body.subjectVersion = owned.versionNo;
@@ -120,10 +112,13 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const userId = await requireUserId();
+    // SEC03: a session-authenticated mutating endpoint without this is
+    // CSRF-able — the cookie travels on a cross-site POST by itself.
+    await assertCsrf(request);
     const shareId = new URL(request.url).searchParams.get("shareId");
 
     if (!shareId) {
-      return NextResponse.json({ error: "shareId is required" }, { status: 400 });
+      return badRequest("shareId is required");
     }
 
     const share = await prisma.crossPracticeShare.findUnique({
@@ -131,7 +126,7 @@ export async function DELETE(request: Request) {
       select: { id: true, sharingPracticeId: true, accessCount: true, revokedAt: true },
     });
 
-    if (!share) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!share) return notFound();
 
     await assertPracticeAccess(userId, share.sharingPracticeId);
 

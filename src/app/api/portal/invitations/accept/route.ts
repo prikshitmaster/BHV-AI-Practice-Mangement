@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import {
   acceptPortalInvitation,
@@ -26,10 +26,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const token = String(body.token ?? "").trim();
     if (!token) {
-      return NextResponse.json(
-        { error: "A sign-in link is required.", code: "NO_TOKEN" },
-        { status: 400 },
-      );
+      return badRequest("A sign-in link is required.", "NO_TOKEN");
     }
 
     const session = await acceptPortalInvitation({

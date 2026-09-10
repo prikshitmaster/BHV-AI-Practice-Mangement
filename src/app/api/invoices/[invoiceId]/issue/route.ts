@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse, notFound } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { requireUserId } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
@@ -25,10 +25,7 @@ export async function POST(
     const body = await request.json();
 
     if (typeof body.expectedVersion !== "number") {
-      return NextResponse.json(
-        { error: "expectedVersion is required", code: "BAD_REQUEST" },
-        { status: 400 },
-      );
+      return badRequest("expectedVersion is required", "BAD_REQUEST");
     }
 
     const invoice = await prisma.invoice.findUnique({
@@ -36,7 +33,7 @@ export async function POST(
       select: { practiceId: true },
     });
     if (!invoice) {
-      return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
+      return notFound();
     }
 
     const issued = await issueInvoice({

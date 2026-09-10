@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { practiceScopeFilter } from "@/lib/practice-scope";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { draftInvoice } from "@/lib/invoicing";
 
@@ -60,13 +60,7 @@ export async function POST(request: Request) {
     const lines = Array.isArray(body.lines) ? body.lines : [];
 
     if (!practiceId || !seriesId || !clientRelationshipId || lines.length === 0) {
-      return NextResponse.json(
-        {
-          error: "practiceId, seriesId, clientRelationshipId and at least one line are required",
-          code: "BAD_REQUEST",
-        },
-        { status: 400 },
-      );
+      return badRequest("practiceId, seriesId, clientRelationshipId and at least one line are required", "BAD_REQUEST");
     }
 
     const invoice = await draftInvoice({

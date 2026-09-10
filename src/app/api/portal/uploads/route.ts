@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { requirePortalContact } from "@/lib/portal-session";
 import { beginPortalUpload } from "@/lib/portal-upload";
@@ -25,13 +25,7 @@ export async function POST(request: Request) {
     const expectedBytes = Number(body.expectedBytes);
 
     if (!clientRelationshipId || !filename || !declaredMimeType) {
-      return NextResponse.json(
-        {
-          error: "Tell us which entity this is for, and the file's name and type.",
-          code: "BAD_REQUEST",
-        },
-        { status: 400 },
-      );
+      return badRequest("Tell us which entity this is for, and the file's name and type.", "BAD_REQUEST");
     }
 
     const result = await beginPortalUpload({

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { receiveUpload } from "@/lib/document-intake";
 import { fileUpload } from "@/lib/documents";
@@ -25,16 +25,10 @@ export async function POST(request: Request) {
     const practiceId = String(form.get("practiceId") ?? "");
 
     if (!(file instanceof File)) {
-      return NextResponse.json(
-        { error: "A file is required", code: "NO_FILE" },
-        { status: 400 },
-      );
+      return badRequest("A file is required", "NO_FILE");
     }
     if (!practiceId) {
-      return NextResponse.json(
-        { error: "practiceId is required", code: "NO_PRACTICE" },
-        { status: 400 },
-      );
+      return badRequest("practiceId is required", "NO_PRACTICE");
     }
 
     const body = Buffer.from(await file.arrayBuffer());

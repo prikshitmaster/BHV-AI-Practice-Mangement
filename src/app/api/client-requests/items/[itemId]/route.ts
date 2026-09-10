@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import {
   acceptItemResponse,
@@ -28,10 +28,7 @@ export async function POST(
     const body = await request.json();
 
     if (!body.practiceId || !body.kind) {
-      return NextResponse.json(
-        { error: "practiceId and kind are required", code: "BAD_REQUEST" },
-        { status: 400 },
-      );
+      return badRequest("practiceId and kind are required", "BAD_REQUEST");
     }
 
     return NextResponse.json(
@@ -68,10 +65,7 @@ export async function PUT(
     const body = await request.json();
 
     if (!body.practiceId || !body.responseId || !body.decision) {
-      return NextResponse.json(
-        { error: "practiceId, responseId and decision are required", code: "BAD_REQUEST" },
-        { status: 400 },
-      );
+      return badRequest("practiceId, responseId and decision are required", "BAD_REQUEST");
     }
 
     if (body.decision === "ACCEPT") {
@@ -95,10 +89,7 @@ export async function PUT(
       );
     }
 
-    return NextResponse.json(
-      { error: "decision must be ACCEPT or REJECT", code: "BAD_DECISION" },
-      { status: 400 },
-    );
+    return badRequest("decision must be ACCEPT or REJECT", "BAD_DECISION");
   } catch (e) {
     return errorResponse(e);
   }

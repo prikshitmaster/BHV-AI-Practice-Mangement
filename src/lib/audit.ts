@@ -14,6 +14,7 @@
 
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
+import { currentCorrelationId } from "@/lib/correlation";
 
 /** Actions treated as sensitive; every one of these MUST be audited. */
 export const SENSITIVE_ACTIONS = [
@@ -103,7 +104,10 @@ export async function recordEvent(input: AuditInput) {
       targetId: input.targetId,
       targetVersion: input.targetVersion ?? null,
       action: input.action,
-      correlationId: input.correlationId ?? null,
+      // API01: an event written during a request inherits that request's
+      // correlation ID automatically, so the audit trail and the response the
+      // caller saw can be tied together without every call site remembering.
+      correlationId: input.correlationId ?? currentCorrelationId(),
       beforeMeta: sanitiseMeta(input.beforeMeta) as never,
       afterMeta: sanitiseMeta(input.afterMeta) as never,
       ruleVersion: input.ruleVersion ?? null,

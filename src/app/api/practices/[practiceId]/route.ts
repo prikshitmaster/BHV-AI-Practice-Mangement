@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { assertPracticeAccess } from "@/lib/practice-scope";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { errorResponse, notFound } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +39,7 @@ export async function GET(
       },
     });
 
-    if (!practice) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!practice) return notFound();
 
     return NextResponse.json({ practice });
   } catch (e) {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { requireUserId } from "@/lib/session";
 import { practiceScopeFilter } from "@/lib/practice-scope";
@@ -50,13 +50,7 @@ export async function POST(request: Request) {
     const amount = Number(body.amount);
 
     if (!practiceId || !clientRelationshipId || !bankAccountId || !Number.isFinite(amount)) {
-      return NextResponse.json(
-        {
-          error: "practiceId, clientRelationshipId, bankAccountId and amount are required",
-          code: "BAD_REQUEST",
-        },
-        { status: 400 },
-      );
+      return badRequest("practiceId, clientRelationshipId, bankAccountId and amount are required", "BAD_REQUEST");
     }
 
     const receipt = await recordReceipt({

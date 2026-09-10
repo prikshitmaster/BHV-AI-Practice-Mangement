@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { issueAccessToken, releaseVersion } from "@/lib/documents";
 
@@ -31,10 +31,7 @@ export async function POST(
     };
 
     if (!body.practiceId || !body.contactIds?.length) {
-      return NextResponse.json(
-        { error: "practiceId and at least one contactId are required" },
-        { status: 400 },
-      );
+      return badRequest("practiceId and at least one contactId are required");
     }
 
     const release = await releaseVersion({

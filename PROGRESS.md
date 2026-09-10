@@ -1104,6 +1104,164 @@ To finish T16 next session:
   underlying eslint invocation had actually failed to start; the direct run
   scanned 9 files and found nothing. Treat a bare rtk lint summary as unverified.
 
+- 2026-09-10 — T15.1 — Schema + migration `20260910120000_outbox`:
+  `OutboxEvent` (unique actionKey, subject + subjectVersion, correlationId,
+  state/attempts/maxAttempts, scheduledFor vs executedAt kept apart, claim
+  columns) and `OutboxConsumerReceipt` (unique eventId+consumer). Purely
+  additive — 2 tables, 1 enum, no ALTER on an existing table, so none of the
+  hand-edited-migration hazards apply. `migrate deploy` applied it and
+  `generate` succeeded. — not yet tested (T15.6 runs the evidence).
+
+- 2026-09-10 — T15.2 — `src/lib/correlation.ts` (API01). One ID per request,
+  carried through `AsyncLocalStorage` rather than threaded through forty
+  signatures; an inbound `x-correlation-id` is honoured only if it matches a
+  boring charset, since it lands in log lines and error bodies. `errorResponse`
+  now funnels every branch through one `fail()` so no refusal can ship without
+  a code and the ID, in the body AND the header; added `badRequest`/`notFound`
+  so per-route hand-rolled 400/404 bodies stop diverging. `recordEvent`
+  inherits the ID automatically. Messages were left byte-identical — only
+  `code` and `correlationId` were added — so no existing assertion moves.
+  — typecheck clean; behaviour tested in T15.6.
+
+- 2026-09-10 — T15.3 — `src/lib/concurrency.ts` (API02). `updateWithVersion`
+  puts the version in the WHERE so the DATABASE decides who wins — deliberately
+  not read-check-write, which passes its check and clobbers anyway when another
+  transaction commits in between. A zero-row result throws
+  `VersionConflictError` carrying a `VersionComparison`: expected vs current
+  version, the differing fields, and who moved it last (read from the audit
+  trail). `merge` is offered ONLY when the two edits touched disjoint fields;
+  otherwise the only honest option is reload. Wired into `errorResponse` as a
+  409 with the comparison in `conflict`. — typecheck clean; tested in T15.6.
+
+- 2026-09-10 — T15.4 — `src/lib/outbox.ts` (API03). Micro-steps 4 and 5 were
+  SWAPPED (outbox before approvals) because the approval path emits an outbox
+  event; writing approvals first would have left the tree unbuildable if the
+  session were cut between them. `emitEvent(tx, …)` takes the transaction
+  client deliberately — an event emitted on the base client commits separately,
+  which is the exact bug the module exists to prevent. A duplicate `actionKey`
+  returns the FIRST event rather than raising: that is what makes two clicks
+  one effect. `dispatchOutbox` claims each row by conditional update, runs each
+  consumer at most once ever via the unique receipt (written in the consumer
+  transaction, not check-then-act), keeps `scheduledFor` and `executedAt`
+  apart, backs off exponentially and ends at DEAD — a visible end state, not a
+  deletion. — typecheck clean; tested in T15.6.
+
+- 2026-09-10 — T15.5 — `src/lib/approvals.ts` (API02). Nothing in the APP
+  recorded an approval before this — `Approval` rows were written directly by
+  the t02/t09 test scripts, which is the gap the requirement is about. Now:
+  the subject version is read `FOR UPDATE` inside the transaction (a plain read
+  lets a state transition commit between check and insert), a mismatch throws
+  the T15.3 comparison, IAM04 is asserted BEFORE the transaction so a refusal
+  never holds a lock, a repeat click by the same reviewer on the same version
+  returns the first approval rather than a second row, and the Approval + its
+  outbox event commit together. `SUBJECT_TABLES` maps the five
+  ApprovalSubjectType values to real tables (FILING → Job, as t09 already
+  does); those names are constants, which is the only reason interpolating
+  them into the lock SQL is safe. — typecheck clean; tested in T15.6.
+
+- 2026-09-10 — T15.6 — `tests/t15-api.ts` WRITTEN AND RUN BEFORE the route
+  wiring, as the T13/T14 lesson says. Both "simultaneously" clauses are real
+  races through `Promise.allSettled`, not sequential calls — a sequential
+  version of either passes against a read-check-write implementation. First run
+  found three things:
+  1. REAL DEFECT in T15.3/T15.5: the conflict comparison said "nobody changed
+     it" for every filing, because the audit trail records a filing as its
+     `Job` while the approval subject type is `FILING`. `versionConflict` now
+     takes every name the record is known by. Fixed; evidence 1 is 11/11 green.
+  2. Invoice issue commits NO outbox event — expected, that is T15.7 wiring.
+  3. REAL GAP vs PRD §34: its own idempotency table says "Issue invoice …
+     retry returns the same issued record", but `issueInvoice` refuses a retry
+     on an ISSUED invoice with NOT_APPROVED. To fix in T15.7.
+
+- 2026-09-10 — T15.7 — Wiring. `POST/GET /api/approvals` (the endpoint that did
+  not exist); `issueInvoice` now returns the same issued record on a retry
+  instead of NOT_APPROVED, which is what PRD §34's own idempotency table says;
+  `issueInvoice` and `transitionJob` emit their outbox events INSIDE their
+  existing transactions. Correlation ID merged into the EXISTING `src/proxy.ts`
+  — I overwrote that file at first, destroying the SEC03 CSRF-pair issuer;
+  recovered it with `git checkout HEAD -- src/proxy.ts` and merged instead.
+  Codemod moved 58 hand-rolled `NextResponse.json({error…})` bodies in 33
+  routes onto `badRequest`/`notFound`/`apiError`, so every refusal now carries
+  a code and the correlation ID.
+  The new route-contract scan (all 47 routes, in t15) then found a REAL
+  SECURITY GAP: `/api/email-jobs` (POST) and `/api/shares` (POST, DELETE) were
+  session-authenticated mutating endpoints with NO CSRF check — a cross-site
+  POST would have carried the session cookie. Both now call `assertCsrf`, and
+  t03 was taught to collect the double-submit pair the way a browser does
+  rather than being exempted from the guard.
+  Three routes are unauthenticated by design and now say so in the test with a
+  reason: the two MFA-enrolment steps (mid-login, gated by the signed
+  challenge) and DOC04 link redemption (the token IS the credential).
+
+- 2026-09-10 — T15.8 — Full regression, two passes as this machine requires.
+  Pass 1, dev server up (on :3001 — a stale production app container held
+  :3000; it was stopped): T02 13, T03 23, T04 37, T05 54, T06 44, T07 55 = 226.
+  Pass 2, dev server stopped: T08 55, T09 60, T10 56, T11 110, T12 106, T13 61,
+  T14 46, T15 50 = 544. **770 assertions, 0 failed.** Lint clean (run directly
+  as `node ./node_modules/eslint/bin/eslint.js src tests/t15-api.ts`): 0 errors, 3
+  pre-existing warnings in untouched login/sign-out components.
+
+- 2026-09-10 — SEC04 DEFECT found by the T15 regression and FIXED —
+  migration `20260910130000_audit_chain_serialisation`. `verifyChain` failed
+  at sequence 2346: two Event rows inserted 2ms apart both carried
+  previousHash = row 2344's hash, because `bhv_event_hash_chain()` read "the
+  highest sequence" with nothing held against a concurrent insert doing the
+  same. The chain forked on its own. NOT caused by T15 — the fork is timed at
+  12:49:47Z, four hours earlier, from the previous session's t14 run, which is
+  the first thing in the codebase to write audit events concurrently; t06 had
+  run BEFORE t14 in that session's ordering and so never saw it.
+  Fix: the trigger now takes `pg_advisory_xact_lock` before reading the
+  previous hash, making read-then-link atomic. The existing chain was rebuilt
+  in the same migration (hash/previousHash only — no audited fact touched),
+  with a note that a rebuild is the WRONG response to a chain break in
+  production, where the fork is the finding. Evidence the fix holds: t12, t13,
+  t14 and t15 then wrote 185 more events, many concurrently, with zero forks.
+
+### T15 — COMPLETE (2026-09-10)
+
+All eight micro-steps done, parent box checked. Evidence exercised, not just
+built: `npm run test:t15` 50/50, full regression 770/770 across two passes.
+
+All three PRD §34 evidence lines are asserted, and both "simultaneously"
+clauses run as REAL races through `Promise.allSettled` — a sequential version
+of either passes against a read-check-write implementation.
+
+Built: API01 (one correlation ID per request, minted in `proxy.ts`, forwarded
+to the route, echoed on every response and inherited by every audit event; one
+error envelope with a code, reached through `errorResponse`/`badRequest`/
+`notFound`/`apiError`), API02 (`updateWithVersion` puts the version in the
+WHERE so the database decides who wins; a conflict returns a comparison naming
+both versions, the colliding fields and who moved it last; `recordApproval`
+locks the subject FOR UPDATE and refuses a stale reviewer), API03 (`OutboxEvent`
+written in the caller's transaction, idempotent consumers via a receipt written
+in the consumer's own transaction, action keys, retries with backoff, DEAD as a
+visible end state, `scheduledFor` and `executedAt` kept apart).
+
+Real defects this task found, all fixed:
+- `/api/email-jobs` and `/api/shares` were session-authenticated MUTATING
+  endpoints with no CSRF check. Found by the route-contract scan, not by any
+  behavioural test — nobody writes a test for the guard they forgot.
+- `issueInvoice` refused a retry on an issued invoice, contradicting PRD §34's
+  own line "retry returns the same issued record".
+- The conflict comparison said "nobody changed it" for every filing, because
+  the audit trail records a filing as its `Job`.
+- SEC04: the audit hash chain forked under concurrent inserts (see the entry
+  above). Pre-existing, from the previous session's t14 run.
+
+Known limits carried forward (none block T15):
+- The correlation ID is shared with library code only inside `withApiContext`;
+  routes not wrapped in it still RETURN an ID (the proxy sets it) but their
+  audit rows carry the ID only if the handler is wrapped. `/api/approvals` is
+  wrapped; the older routes are not yet.
+- `dispatchOutbox` has no runner. Nothing calls it on a schedule — events
+  accumulate as PENDING until a worker or a cron is wired up (T18 territory,
+  or whenever the BullMQ worker from T12 grows an outbox pass).
+- API04 (versioned public APIs, service accounts, rate limits, webhook
+  signatures and replay checks) is R1 and NOT built.
+- The version check is now general, but only `recordApproval`, the invoice
+  lifecycle and fee arrangements USE it. Deadline and allocation mutations
+  still rely on their own module-level guards.
+
 ### T14 — COMPLETE (2026-09-10)
 
 All eight micro-steps done, parent box checked. Evidence exercised, not just
@@ -1152,7 +1310,15 @@ Known limits carried forward (none of them block T13):
 
 ## SESSION HANDOFF (2026-09-10, end of session)
 
-**State: 14 of 18 R0 tasks complete, plus T16 substantially built.**
+**State (updated end of the T15 session): 15 of 18 R0 tasks complete, plus
+T16 substantially built.** T15 is done — the handoff text below it was written
+before T15 and describes it as the next task; read the T15 section above for
+what actually landed. The next unstarted task is **T17 — Reports shell
+(REP01, PRD §40)**, and turning the `/reports` NAV01 pin back on in `ux.ts` is
+part of it (as `/billing` was for T14). Then **T18 — Backup & recovery**, and
+T16's outstanding manual browser pass.
+
+**Superseded, kept for the detail:**
 T01-T05 and T07-T14 fully done and tested. T06 is done except for an
 independent penetration test, which needs an external reviewer and blocks
 release per SEC01. T16 was built out of order at the owner's request and is
@@ -1166,18 +1332,20 @@ have not been started at all.
 
 1. Read this file + SPEC.md + TASKS.md (the project-builder skill does this
    automatically). Do NOT re-read PRD.md end to end.
-2. The next unstarted task in order is **T15 — API contracts & concurrency,
-   API01-03 (PRD §34)**: server-side auth on every endpoint, optimistic
-   version checks, outbox-pattern event reliability.
-   *Test: two reviewers approve different versions simultaneously — only the
-   current version can be approved; two invoice-issue clicks create one
-   invoice.*
-   Useful head start: T14 already proved half of that second clause. Its
-   `issueInvoice` claims the invoice row BEFORE allocating a number, and
-   `tests/t14-billing.ts` asserts both that two simultaneous issues take two
-   different numbers and that a stale issue burns none. T15's job is to make
-   that property general rather than per-module — the outbox is the genuinely
-   new part, and nothing in the codebase implements one yet.
+2. The next unstarted task in order is **T17 — Reports shell, REP01
+   (PRD §40)**: filtered reports that state their refresh time, formula
+   definition and record count, where an empty denominator reads
+   "Not available" and never a silent zero.
+   Two things that belong to T17 and are easy to miss:
+   - Turn the `/reports` NAV01 pin back on in `src/lib/ux.ts` (`built: false`
+     today). T14 did the same for `/billing`. The t16 test walks every href in
+     the rendered menu and requires a 200, so the pin cannot be turned on
+     before the screen exists.
+   - T16.9's manual browser pass (keyboard only, 200% zoom, both themes) is
+     still outstanding and needs a person at a browser, not a test.
+   After T17: **T18 — Backup & recovery** (BCP01-04, BCP06), then R0's exit
+   gate — PRD §6 plus the full §42 acceptance scenario table — before any R1
+   work or `TASKS-R1.md`.
 3. Bring the environment up:
    ```
    docker compose up -d db redis minio     # Postgres, Redis, MinIO
@@ -1191,12 +1359,44 @@ have not been started at all.
    Fix: `docker compose up -d --force-recreate minio`.
    If `docker compose` cannot reach the daemon at all, Docker Desktop is not
    running — start it and wait, the containers come back by themselves.
-4. Verify nothing has drifted: `npm test` (runs T02-T14, 720 assertions).
+   NOTE: the `app` container is deliberately STOPPED. It serves a stale
+   PRODUCTION build on :3000, which both shadows `npm run dev` and refuses the
+   `x-bhv-user-id` dev actor header the T03/T04 suites drive — so a test run
+   against it fails for reasons that have nothing to do with the code. Keep it
+   stopped and use `npm run dev`. If `next dev` reports "Another next dev
+   server is already running" it prints the PID; `taskkill /PID <pid> /F`, or
+   just point the tests at the port it names with `BASE_URL=http://localhost:<port>`.
+4. Verify nothing has drifted: `npm test` (runs T02-T15, 770 assertions).
    On this memory-constrained machine run it in two passes — T02-T07 with
-   `npm run dev` up, then T08-T14 with it stopped. Running all thirteen with
+   `npm run dev` up, then T08-T15 with it stopped. Running all fourteen with
    the dev server live ran the host out of memory and killed T08.
+   T16 (73 assertions) is NOT in `npm test` and needs the dev server; run
+   `npm run test:t16` separately.
 
 ### Things that will bite you if you don't know them
+
+- **Read a file before you overwrite it, even one you think is new.** T15
+  wrote a fresh `src/proxy.ts` for the correlation ID without looking first
+  and destroyed the SEC03 CSRF-pair issuer that lives there. `git checkout
+  HEAD -- src/proxy.ts` recovered it. Nothing in the type system or the tests
+  would have caught it until a browser could no longer POST anything.
+- **A concurrency test must actually run concurrently.** Both of T15's
+  "simultaneously" clauses use `Promise.allSettled` with both calls in flight.
+  Written sequentially, each one passes against a read-check-write
+  implementation — which is the exact bug the requirement is about.
+- **A contract scan over every route finds what behavioural tests cannot.**
+  The t15 scan walks all 47 `route.ts` files and asserts each authenticates,
+  each mutating one calls `assertCsrf`, and none hand-rolls an error body. It
+  immediately found two session-authenticated mutating endpoints with no CSRF
+  check. No behavioural test would ever have caught them: nobody writes a test
+  for the guard they forgot to add.
+- **In a `bash -c` heredoc here, backslashes and backticks are NOT literal**
+  even with a quoted delimiter. `\n` in a Python heredoc arrived as a real
+  newline and every anchor match failed; backticks inside a double-quoted
+  `node -e` string were executed as command substitution and silently blanked
+  four spans of a PROGRESS.md entry. Use Python raw strings (`r'''...'''`) with
+  single backslashes, and prefer the Edit/Write tools for anything with
+  backticks in it.
 
 - **Write the acceptance test BEFORE the routes and screens, not after.**
   T13 was built end to end and typechecked before a single line ran; T14
@@ -1253,6 +1453,10 @@ have not been started at all.
 - No malware engine attached to document intake (T11 / DOC01). Intake fails
   closed, so this blocks a usable production deployment, not just a secure
   one — see SECURITY.md "What would block release today", item 5.
+- Nothing runs `dispatchOutbox` on a schedule (T15/API03). Events are written
+  durably and correctly, but they accumulate as PENDING until a worker or cron
+  calls the dispatcher — so no side effect actually fires yet. Needs wiring
+  into the T12 BullMQ worker, or a cron, before deployment.
 - Real BHV identifiers, bank accounts and signatories still to be
   confirmed at onboarding; everything built so far uses fictional data
   only.
@@ -1273,3 +1477,29 @@ have not been started at all.
 - No production credentials, real client data, or live AI/email/filing
   integrations until the owner explicitly approves the tested
   configuration (PRD §45 "Instruction to give the engineer").
+
+## REGRESSION FLAGGED, NOT YET FIXED (2026-09-10, found by a concurrent
+## session — read this before touching src/proxy.ts)
+
+When `src/proxy.ts` was rewritten for T15.2 (API01 correlation ID), it
+REPLACED the entire T06 SEC03 proxy body instead of keeping both. Checked by
+grepping the whole `src/` tree: nothing sets `Content-Security-Policy`,
+`X-Frame-Options`, `HSTS`, or mints the `bhv_csrf` / `bhv_csrf_token` cookie
+pair anymore. Only the constants survive in csrf.ts / csrf-shared.ts — the
+code that actually issued them is gone.
+
+This is the SAME bug class T16 already found and fixed once ("nothing ever
+issued the CSRF token" — see the T16 log entry above): every mutating route
+becomes unreachable from a real browser, and the security headers T06's
+44/44 acceptance test verified are gone from every response. If `npm run
+test:t06` or the full regression suite is run right now, expect real
+failures here — this is not a flaky test, the behaviour is actually missing.
+
+Fix: merge the two responsibilities back into one `proxy.ts` — mint the
+nonce/CSP/HSTS/frame headers AND the CSRF pair (T06's original body) AND set
+the correlation ID header (T15.2's addition), since Next.js only runs one
+proxy file. Do not just revert to the old body — the correlation-ID logic is
+real, needed, already tested at the unit level, and should stay.
+
+Not yet fixed as of this note. Whoever picks up T15.7/T15.8 or T06 next
+should do this before running either suite.

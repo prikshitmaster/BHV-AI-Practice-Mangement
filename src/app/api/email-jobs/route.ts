@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { assertPracticeAccess } from "@/lib/practice-scope";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { assertCsrf } from "@/lib/csrf";
+import { badRequest, errorResponse, notFound } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,9 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const userId = await requireUserId();
+    // SEC03: a session-authenticated mutating endpoint without this is
+    // CSRF-able — the cookie travels on a cross-site POST by itself.
+    await assertCsrf(request);
     const body = (await request.json()) as {
       practiceId?: string;
       invoiceId?: string;
@@ -30,10 +34,7 @@ export async function POST(request: Request) {
     };
 
     if (!body.practiceId || !body.invoiceId || !body.to) {
-      return NextResponse.json(
-        { error: "practiceId, invoiceId and to are required" },
-        { status: 400 },
-      );
+      return badRequest("practiceId, invoiceId and to are required");
     }
 
     await assertPracticeAccess(userId, body.practiceId);
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
       select: { id: true, practiceId: true, status: true },
     });
 
-    if (!invoice) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!invoice) return notFound();
 
     const job = await prisma.event.create({
       data: {

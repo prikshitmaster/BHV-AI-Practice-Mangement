@@ -6,6 +6,12 @@
  * "A lock icon or 'AES' label in the interface is not acceptance evidence."
  *
  * Renamed from middleware.ts to proxy.ts (Next.js 16 file convention).
+ *
+ * T15 added the API01 correlation ID here for the same reason the CSRF pair is
+ * issued here: it has to hold for EVERY response, including routes nobody
+ * remembered to wrap. The ID is forwarded to the route as a request header, so
+ * a wrapped handler adopts this one instead of minting a second ID for the
+ * same request.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -14,6 +20,15 @@ import { NextResponse, type NextRequest } from "next/server";
 import { CSRF_COOKIE, CSRF_RAW_COOKIE } from "@/lib/csrf-shared";
 
 const isProduction = process.env.NODE_ENV === "production";
+
+const CORRELATION_HEADER = "x-correlation-id";
+
+/**
+ * API01: an inbound ID is honoured so a caller can tie a chain of requests
+ * together, but only if it is short and boring — the value lands in log lines
+ * and error bodies, so it is untrusted input like any other header.
+ */
+const SAFE_CORRELATION_ID = /^[A-Za-z0-9._:-]{8,64}$/;
 
 /**
  * No 'unsafe-inline' for scripts. Next.js needs a nonce for its inline
@@ -62,10 +77,20 @@ function randomToken(): string {
 export async function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
 
+  const suppliedCorrelationId = request.headers.get(CORRELATION_HEADER)?.trim();
+  const correlationId =
+    suppliedCorrelationId && SAFE_CORRELATION_ID.test(suppliedCorrelationId)
+      ? suppliedCorrelationId
+      : crypto.randomUUID();
+
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
+  requestHeaders.set(CORRELATION_HEADER, correlationId);
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
+
+  // API01: on the response too, so a caller can quote it back on any endpoint.
+  response.headers.set(CORRELATION_HEADER, correlationId);
 
   response.headers.set("Content-Security-Policy", contentSecurityPolicy(nonce));
   response.headers.set("X-Content-Type-Options", "nosniff");

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { errorResponse, notFound } from "@/lib/api";
 import { requireUserId } from "@/lib/session";
 import { assertPracticeAccess } from "@/lib/practice-scope";
 import { prisma } from "@/lib/prisma";
@@ -33,7 +33,7 @@ export async function GET(
       },
     });
     if (!invoice) {
-      return NextResponse.json({ error: "Not found", code: "NOT_FOUND" }, { status: 404 });
+      return notFound();
     }
 
     await assertPracticeAccess(userId, invoice.practiceId);

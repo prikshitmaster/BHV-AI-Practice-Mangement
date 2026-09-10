@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { requirePortalContact } from "@/lib/portal-session";
 import { appendPortalUploadPart } from "@/lib/portal-upload";
@@ -27,10 +27,7 @@ export async function PUT(
     const partNumber = Number(partParam);
 
     if (partParam === null || !Number.isInteger(partNumber)) {
-      return NextResponse.json(
-        { error: "Which part is this?", code: "NO_PART_NUMBER" },
-        { status: 400 },
-      );
+      return badRequest("Which part is this?", "NO_PART_NUMBER");
     }
 
     const body = Buffer.from(await request.arrayBuffer());

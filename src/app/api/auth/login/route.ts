@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { login } from "@/lib/auth";
 import { issueLoginChallenge } from "@/lib/login-challenge";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -17,10 +17,7 @@ export async function POST(request: Request) {
     const email = String(body.email ?? "").trim().toLowerCase();
     const password = String(body.password ?? "");
     if (!email || !password) {
-      return NextResponse.json(
-        { error: "Email and password are required.", code: "BAD_REQUEST" },
-        { status: 400 },
-      );
+      return badRequest("Email and password are required.", "BAD_REQUEST");
     }
 
     const result = await login(email, password);

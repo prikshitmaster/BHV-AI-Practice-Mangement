@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { requireUserId } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
@@ -27,10 +27,7 @@ export async function POST(request: Request) {
     const grants = Array.isArray(body.grants) ? body.grants : [];
 
     if (!practiceId || !contactId) {
-      return NextResponse.json(
-        { error: "practiceId and contactId are required", code: "BAD_REQUEST" },
-        { status: 400 },
-      );
+      return badRequest("practiceId and contactId are required", "BAD_REQUEST");
     }
 
     const actor = await prisma.user.findUniqueOrThrow({
@@ -72,10 +69,7 @@ export async function DELETE(request: Request) {
     const reason = String(body.reason ?? "").trim();
 
     if (!invitationId || !reason) {
-      return NextResponse.json(
-        { error: "invitationId and a reason are required", code: "BAD_REQUEST" },
-        { status: 400 },
-      );
+      return badRequest("invitationId and a reason are required", "BAD_REQUEST");
     }
 
     await revokePortalInvitation({ invitationId, actorUserId: userId, reason });

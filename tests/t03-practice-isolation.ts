@@ -42,13 +42,35 @@ function check(name: string, condition: boolean, detail = "") {
 const RUN = Date.now();
 const tag = (s: string) => `${s}-${RUN}`;
 
+/**
+ * SEC03: the double-submit pair a browser is given on its first GET. Collected
+ * the same way the app's own script collects it, rather than the test being
+ * exempted from the guard — an exempt test cannot tell a working CSRF setup
+ * from one where nothing issues a token at all.
+ */
+let csrfPair: { cookie: string; token: string } | null = null;
+
+async function ensureCsrf() {
+  if (csrfPair) return csrfPair;
+  const bootstrap = await fetch(`${BASE_URL}/`);
+  const setCookies = bootstrap.headers.getSetCookie().join("; ");
+  const hash = /bhv_csrf=([^;]+)/.exec(setCookies)?.[1] ?? "";
+  const token = /bhv_csrf_token=([^;]+)/.exec(setCookies)?.[1] ?? "";
+  csrfPair = { cookie: `bhv_csrf=${hash}; bhv_csrf_token=${token}`, token };
+  return csrfPair;
+}
+
 /** Request as a specific user, via the T05-placeholder actor header. */
 async function as(userId: string, path: string, init: RequestInit = {}) {
+  const csrf = await ensureCsrf();
   return fetch(`${BASE_URL}${path}`, {
     ...init,
     headers: {
       "x-bhv-user-id": userId,
       "content-type": "application/json",
+      cookie: csrf.cookie,
+      origin: BASE_URL,
+      "x-bhv-csrf": csrf.token,
       ...(init.headers ?? {}),
     },
   });

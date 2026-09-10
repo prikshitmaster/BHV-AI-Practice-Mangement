@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { requireUserId } from "@/lib/session";
 import { practiceScopeFilter } from "@/lib/practice-scope";
@@ -59,13 +59,7 @@ export async function POST(request: Request) {
     const taxTreatment = String(body.taxTreatment ?? "").trim();
 
     if (!practiceId || !engagementId || !basis || !taxTreatment) {
-      return NextResponse.json(
-        {
-          error: "practiceId, engagementId, basis and taxTreatment are required",
-          code: "BAD_REQUEST",
-        },
-        { status: 400 },
-      );
+      return badRequest("practiceId, engagementId, basis and taxTreatment are required", "BAD_REQUEST");
     }
 
     const arrangement = await createFeeArrangement({

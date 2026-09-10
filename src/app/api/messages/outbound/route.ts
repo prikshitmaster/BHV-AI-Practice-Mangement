@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { sendOutbound } from "@/lib/communication";
 
@@ -27,10 +27,7 @@ export async function POST(request: Request) {
     const required = ["practiceId", "clientRelationshipId", "confirmedPreviewHash", "dedupKey"];
     const missing = required.filter((k) => !body[k]);
     if (missing.length > 0 || !Array.isArray(body.contactIds)) {
-      return NextResponse.json(
-        { error: `Missing: ${[...missing, ...(Array.isArray(body.contactIds) ? [] : ["contactIds"])].join(", ")}`, code: "BAD_REQUEST" },
-        { status: 400 },
-      );
+      return badRequest(`Missing: ${[...missing, ...(Array.isArray(body.contactIds) ? [] : ["contactIds"])].join(", ")}`);
     }
 
     const result = await sendOutbound({

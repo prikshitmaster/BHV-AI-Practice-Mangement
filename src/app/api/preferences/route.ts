@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { badRequest, errorResponse } from "@/lib/api";
 import { assertCsrf } from "@/lib/csrf";
 import { prisma } from "@/lib/prisma";
 
@@ -27,22 +27,13 @@ export async function PUT(request: Request) {
     const density = body.densityPreference;
 
     if (theme !== undefined && !THEMES.includes(theme)) {
-      return NextResponse.json(
-        { error: `themePreference must be one of ${THEMES.join(", ")}`, code: "BAD_THEME" },
-        { status: 400 },
-      );
+      return badRequest(`themePreference must be one of ${THEMES.join(", ")}`, "BAD_THEME");
     }
     if (density !== undefined && !DENSITIES.includes(density)) {
-      return NextResponse.json(
-        { error: `densityPreference must be one of ${DENSITIES.join(", ")}`, code: "BAD_DENSITY" },
-        { status: 400 },
-      );
+      return badRequest(`densityPreference must be one of ${DENSITIES.join(", ")}`, "BAD_DENSITY");
     }
     if (theme === undefined && density === undefined) {
-      return NextResponse.json(
-        { error: "Nothing to change", code: "NO_CHANGE" },
-        { status: 400 },
-      );
+      return badRequest("Nothing to change", "NO_CHANGE");
     }
 
     const saved = await prisma.user.update({

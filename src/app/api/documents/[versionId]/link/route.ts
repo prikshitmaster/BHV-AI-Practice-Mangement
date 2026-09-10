@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAccessiblePracticeIds, findActiveShare } from "@/lib/practice-scope";
 import { requireUserId } from "@/lib/session";
-import { errorResponse } from "@/lib/api";
+import { apiError, errorResponse, notFound } from "@/lib/api";
 import { issueAccessToken } from "@/lib/documents";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +38,7 @@ export async function GET(
     });
 
     // Unknown id and forbidden id must be indistinguishable.
-    if (!version) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!version) return notFound();
 
     const allowed = await getAccessiblePracticeIds(userId);
     let via: "membership" | "share" = "membership";
@@ -66,7 +66,7 @@ export async function GET(
             reason: "No membership and no active cross-practice grant",
           },
         });
-        return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return notFound();
       }
 
       await prisma.crossPracticeShare.update({
@@ -78,10 +78,9 @@ export async function GET(
 
     // DOC02: an unscanned or infected original is never handed out.
     if (version.scanVerdict !== "CLEAN") {
-      return NextResponse.json(
-        { error: "Document not available", scanVerdict: version.scanVerdict },
-        { status: 409 },
-      );
+      return apiError(409, "DOCUMENT_NOT_AVAILABLE", "Document not available", {
+        scanVerdict: version.scanVerdict,
+      });
     }
 
     // T11 (DOC04): the link handed back is a token bound to a row that is

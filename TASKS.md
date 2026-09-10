@@ -486,12 +486,41 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
 
 ## Phase 6 — Platform correctness
 
-- [ ] **T15 — API contracts & concurrency.** Implement API01-03 (PRD §34):
+- [x] **T15 — API contracts & concurrency.** Implement API01-03 (PRD §34):
   server-side auth on every endpoint, optimistic version checks, outbox-
   pattern event reliability.
   *Test: two reviewers approve different versions simultaneously — only
   the current version can be approved; two invoice-issue clicks create
   one invoice.*
+  - [x] T15.1 — Schema + migration `outbox`. `OutboxEvent` (actionKey unique,
+    payload, subject + subjectVersion, correlationId, state, attempts,
+    scheduledFor, executedAt, lastError) and `OutboxConsumerReceipt`
+    (unique on eventId+consumer) so a consumer that runs twice acts once.
+    Purely additive — no existing column touched.
+  - [x] T15.2 — `src/lib/correlation.ts` + `errorResponse` upgrade (API01):
+    one correlation ID per request, echoed on every response and error and
+    carried into `recordEvent`; every error body is `{error, code,
+    correlationId}` with a safe human message.
+  - [x] T15.3 — `src/lib/concurrency.ts` (API02): `VersionConflictError`
+    carrying a comparison (expected vs current version, what changed, who
+    changed it, when) and `updateWithVersion` — a conditional update whose
+    zero-row result is a conflict, never a silent overwrite.
+  - [x] T15.5 — `src/lib/approvals.ts` (API02): the approval path that does
+    not exist yet — approvals are currently only created by tests. Records
+    a decision against an EXACT subject version, refuses a stale version
+    with a comparison, and enforces the T04 separation-of-duties check.
+  - [x] T15.4 — `src/lib/outbox.ts` (API03): `emitEvent(tx, …)` writes in the
+    caller's transaction; `dispatchOutbox` runs consumers idempotently, keeps
+    action key / attempts / scheduledFor / executedAt, and isolates failure so
+    a dead external side effect never rolls the business change back.
+  - [x] T15.6 — Acceptance test `tests/t15-api.ts`. WRITTEN AND RUN BEFORE the
+    route wiring in T15.7, per the T13/T14 lesson: three PRD §34 evidence
+    lines plus controls for each safeguard.
+  - [x] T15.7 — Wire the routes: `expectedVersion` on the mutating endpoints,
+    a POST /api/approvals endpoint, outbox emission on job transition and
+    invoice issue, correlation ID middleware across all 46 routes, and an
+    API01 contract assertion that every route authenticates.
+  - [x] T15.8 — Run the acceptance test + full regression suite.
 
 - [~] **T16 — Navigation & UX states.** Implement UX01-05, NAV01-04
   (PRD §38-39): light/dark themes, five states per screen, accessible

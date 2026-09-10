@@ -37,6 +37,7 @@ import { recordEvent } from "@/lib/audit";
 import { assertCan } from "@/lib/permissions";
 import { assertMayApprove } from "@/lib/separation-of-duties";
 import { refreshInvoiceStatus } from "@/lib/receipts";
+import { emitEvent } from "@/lib/outbox";
 
 export class InvoiceError extends Error {
   readonly status = 409;
@@ -520,6 +521,18 @@ export async function issueInvoice(params: {
   if (!invoice) {
     throw new InvoiceError("No such invoice in this practice.", "NOT_FOUND");
   }
+  // API03 idempotency (PRD §34, "Issue invoice … retry returns the same issued
+  // record"). A retry after a dropped response, or a second click that arrives
+  // after the first has committed, must NOT read as an error: the caller's
+  // intent is already satisfied, and refusing it invites them to re-draft an
+  // invoice that already exists and already carries a number.
+  if (invoice.status === "ISSUED" && invoice.displayNumber) {
+    return prisma.invoice.findFirstOrThrow({
+      where: { id: invoice.id, practiceId: params.practiceId },
+      include: { lines: { orderBy: { sortOrder: "asc" } } },
+    });
+  }
+
   if (invoice.status !== "APPROVED") {
     throw new InvoiceError(
       `An invoice must be approved before it is issued (this one is ${invoice.status}).`,
@@ -592,6 +605,27 @@ export async function issueInvoice(params: {
         issueDate,
         issuedAt: new Date(),
         issuedSnapshot: snapshot as never,
+      },
+    });
+
+    // API03: the event commits WITH the issue. An invoice cannot be issued
+    // without its downstream effects being recorded, and a failure to deliver
+    // them later cannot un-issue it. The action key is the invoice and the
+    // version issued, so a retry emits nothing new.
+    await emitEvent(tx, {
+      eventType: "INVOICE_ISSUED",
+      subjectType: "Invoice",
+      subjectId: invoice.id,
+      subjectVersion: params.expectedVersion + 1,
+      practiceId: params.practiceId,
+      actionKey: `invoice-issued:${params.practiceId}:${invoice.id}`,
+      payload: {
+        number: allocated.display,
+        sequenceNumber: allocated.number,
+        seriesId: invoice.seriesId,
+        total: invoice.total.toFixed(2),
+        currency: invoice.currency,
+        issuedByUserId: params.userId,
       },
     });
 

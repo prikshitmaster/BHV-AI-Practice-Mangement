@@ -1332,6 +1332,51 @@ To finish T16 next session:
   menu-href walk immediately below it is what keeps the pin and the screen
   honest about each other, and it went green without change.
 
+- 2026-09-11 — T16.12 — The browser pass, done in Chrome (see the T16 section
+  below). Found and fixed three keyboard defects in the NAV04 confirmation
+  dialog plus a duplicate-id bug, re-verified each in the browser, and guarded
+  all four at source level in t16 — 91/91. `npm run dev:walk`: every screen
+  still renders 200.
+
+### T16 — COMPLETE (2026-09-11)
+
+The browser pass finally happened. The owner connected the Chrome extension,
+and the whole §38 evidence line was walked in a real browser rather than
+asserted from HTML.
+
+What was walked, keyboard only, no pointer:
+- Sign in — email, password, TOTP — with a visible focus ring at every stop.
+- The skip link: first Tab reveals it, Enter jumps to `#main`.
+- Invoice issue end to end: three Tabs from the skip link to the Issue button,
+  Enter, confirm, and the invoice took number INV/2025-26/2 with its
+  particulars locked and the Issue action gone afterwards.
+- The same paths in BOTH themes. Dark paints on the first response with no
+  flash, and the review queue shows IAM04's refusal in words and a glyph
+  ("! Your own work — you cannot review this"), not by colour.
+- 200% zoom: no horizontal scrolling, the nav stays available, the primary
+  action stays inside the viewport at a 44px target, body text stays 16px.
+
+**Three real defects, found only because a browser was driven, and fixed:**
+the NAV04 confirmation dialog took no focus when it opened (focus stayed on
+the trigger behind the modal); Tab escaped it to the page behind; and Escape
+did nothing. A fourth, found while fixing: both `SafeAction` instances on the
+invoice screen rendered `id="confirm-title"`, so aria-labelledby could resolve
+to the other dialog's heading. `src/components/safe-action.tsx` now moves
+focus to Cancel — the least destructive option, for dialogs that guard issue,
+release and purge — traps Tab, dismisses on Escape with focus returned to the
+trigger, and takes its ids from `useId()`. All four re-verified in the browser.
+
+None of this was observable from a server-rendered response, which is exactly
+why the pass could not be replaced by an assertion. The fixes are now guarded
+at source level in `tests/t16-ux.ts` (91/91), the way the theme switcher is.
+
+Not walked, and stated rather than implied: client onboarding and a full
+document release were not driven end to end — the shell they share (skip link,
+focus order, focus rings, both themes, 200% reflow) was, and the review queue
+was reached by keyboard, but the two remaining workflows were not completed in
+the browser. The dev database has no reviewable item this user did not author,
+so a release could not be exercised without new fixture data.
+
 ### T17 — COMPLETE (2026-09-11)
 
 All eight micro-steps done, parent box checked. Evidence exercised, not just
@@ -1463,23 +1508,20 @@ Known limits carried forward (none of them block T13):
 
 ---
 
-## SESSION HANDOFF (2026-09-11, end of the T17 session)
+## SESSION HANDOFF (2026-09-11, end of the T16/T17 session)
 
-**State (updated end of the T17 session): 16 of 18 R0 tasks complete.**
-T01-T15 and T17 are done and tested. T16 is `[~]` for ONE reason only — the
-physical browser pass (keyboard, 200% zoom, both themes) has never been done,
-because the Chrome extension is not connected here; everything else in T16
-passes, including the invoice-issue leg added this session. T06 is done except
-its independent penetration test, which needs an external reviewer.
+**State: 17 of 18 R0 tasks complete.** T01-T17 are done and tested, T16
+included — its browser pass was completed in Chrome and closed the last box.
+T06 is done except its independent penetration test, which needs an external
+reviewer and blocks release per SEC01.
 
 The only R0 task never started is **T18 — Backup & recovery (BCP01-04, BCP06,
-PRD §37)**. After that: T16's browser pass, T06's pen test, then R0's exit gate
-— PRD §6 plus the full §42 acceptance scenario table — before any R1 work or
-`TASKS-R1.md`.
+PRD §37)**. After that: T06's pen test, then R0's exit gate — PRD §6 plus the
+full §42 acceptance scenario table — before any R1 work or `TASKS-R1.md`.
 
 T16 was built out of order at the owner's request — see the T16 BLOCKER
-section above for that history; its blocker is long cleared and only the
-browser pass remains. R1 and R2 have not been started at all.
+section above for that history. It is fully closed now. R1 and R2 have not
+been started at all.
 
 ### To resume in a fresh session
 
@@ -1502,8 +1544,8 @@ browser pass remains. R1 and R2 have not been started at all.
      outside; neither has an environment-level kill switch yet, and inventing
      one per module during a restore drill is how a test email reaches a
      client.
-   Still outstanding elsewhere, both needing a person rather than code:
-   T16's browser pass and T06's independent penetration test.
+   Still outstanding elsewhere: T06's independent penetration test, which
+   needs an external reviewer, not code.
 3. Bring the environment up:
    ```
    docker compose up -d db redis minio     # Postgres, Redis, MinIO

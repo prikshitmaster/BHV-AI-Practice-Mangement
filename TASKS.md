@@ -522,7 +522,7 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
     API01 contract assertion that every route authenticates.
   - [x] T15.8 — Run the acceptance test + full regression suite.
 
-- [~] **T16 — Navigation & UX states.** Implement UX01-05, NAV01-04
+- [x] **T16 — Navigation & UX states.** Implement UX01-05, NAV01-04
   (PRD §38-39): light/dark themes, five states per screen, accessible
   identity cues, safe action confirmation.
   *Test: complete client onboarding, document review, and invoice issue
@@ -563,7 +563,7 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
     importing `next/headers` via csrf.ts, `localhost`/IPv6 in DATABASE_URL,
     and a NAV02 assertion that passed for the wrong reason) — see
     PROGRESS.md.
-  - [~] T16.9 — Full regression suite run: T02 13, T03 23, T04 37, T05 54,
+  - [x] T16.9 — Full regression suite run: T02 13, T03 23, T04 37, T05 54,
     T06 44, T07 55, T08 55, T09 60, T10 56, T11 110, T12 106, T16 73
     = 686 assertions, all green. Caught and fixed a real regression T16
     had introduced in the `/api/search` contract that T03 depends on.
@@ -580,7 +580,7 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
     T14 exists now: assert the issue action is reachable and operable by
     keyboard alone, in both themes, against the real rendered `/billing`
     screens.
-  - [ ] T16.12 — The real browser pass, in Chrome, not asserted from HTML:
+  - [x] T16.12 — The real browser pass, in Chrome, not asserted from HTML:
     tab through client onboarding, document review and invoice issue with no
     pointer, in light AND dark, at 100% and 200% zoom. Record what is actually
     observed — a focus order that skips, a control that leaves the viewport at

@@ -22,12 +22,10 @@
  *     aria-current, table scopes, focus styling, status text alongside colour;
  *   - NAV01's menu shape, NAV03's five states, and the deep-link rejection.
  *
- * NOT covered here: actually pressing Tab through three workflows in two
- * themes at 200% zoom. That needs a real browser, and is recorded in
- * PROGRESS.md as a manual browser pass rather than pretended at.
- *
- * Also NOT covered: the invoice-issue leg of §38's evidence, which needs T14
- * (FIN01/FIN02/FIN04). T16's parent box stays open until it exists.
+ * NOT observable here: what a dialog does with focus once a user opens it.
+ * The confirmation is not in any server-rendered response, so the browser pass
+ * (recorded in PROGRESS.md) is what found its three keyboard defects; the
+ * assertions near the end of this file guard the fixes at source level.
  *
  * Needs the dev server running. Run: npm run test:t16
  */
@@ -687,6 +685,46 @@ async function main() {
     searchComponent.includes("sessionStorage") && !searchComponent.includes("localStorage"),
   );
   check("breadcrumbs are rendered with a Back destination", clients.html.includes('aria-label="Breadcrumb"'));
+
+  /**
+   * NAV04 dialog focus management — every one of these was found by DRIVING A
+   * BROWSER, not by reading HTML, because the dialog does not exist in the
+   * markup until someone activates the trigger. The keyboard pass found that
+   * the alertdialog took no focus when it opened, that Tab escaped it to the
+   * page behind, and that Escape did nothing. Asserted against the source for
+   * the same reason the theme switcher is: the behaviour cannot be observed in
+   * a server-rendered response.
+   */
+  // `safeAction` is the source already read in the NAV04 section above.
+  check(
+    "NAV04: opening the confirmation moves focus INTO the dialog",
+    safeAction.includes("cancelRef.current?.focus()"),
+  );
+  check(
+    "...onto Cancel, the least destructive option, not onto the confirm button",
+    /cancelRef[\s\S]{0,400}Cancel/.test(safeAction) && safeAction.includes("ref={cancelRef}"),
+  );
+  check(
+    "NAV04: Escape dismisses the dialog and returns focus to the trigger",
+    safeAction.includes('event.key === "Escape"') &&
+      safeAction.includes("triggerRef.current?.focus()"),
+  );
+  check(
+    "NAV04: Tab is trapped inside the dialog rather than escaping to the page behind",
+    safeAction.includes('event.key !== "Tab"') &&
+      safeAction.includes("last.focus()") &&
+      safeAction.includes("first.focus()"),
+  );
+  // Comments stripped first, for the third time in this file: the component
+  // documents the fixed bug by NAMING the old fixed id, and matching raw text
+  // made that sentence fail the assertion describing it.
+  const safeActionCode = safeAction
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+  check(
+    "the dialog's ids are per-instance, so two SafeActions on one screen cannot collide",
+    safeActionCode.includes("useId()") && !safeActionCode.includes('id="confirm-title"'),
+  );
 
   // ======================================================== §38 EVIDENCE
   //

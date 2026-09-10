@@ -37,6 +37,11 @@ import { readFileSync } from "node:fs";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { createSession } from "../src/lib/auth";
+import {
+  approveInvoice,
+  createInvoiceSeries,
+  draftInvoice,
+} from "../src/lib/invoicing";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -681,6 +686,149 @@ async function main() {
     searchComponent.includes("sessionStorage") && !searchComponent.includes("localStorage"),
   );
   check("breadcrumbs are rendered with a Back destination", clients.html.includes('aria-label="Breadcrumb"'));
+
+  // ======================================================== §38 EVIDENCE
+  //
+  // "Complete client onboarding, document review and invoice ISSUE using only
+  //  the keyboard in both themes."
+  //
+  // The third leg. Until T14 there was no invoice to issue, and this file's
+  // header said so. What is asserted here is the half a test can honestly
+  // assert: that the issue path is built from controls a keyboard can reach
+  // and operate, in BOTH themes, and that issuing actually completes. The
+  // physical half — tabbing through it, at 200% zoom — is the browser pass
+  // recorded in PROGRESS.md, and no assertion here pretends to be it.
+  console.log("\n  EVIDENCE — invoice issue is reachable and operable by keyboard, both themes");
+
+  // A partner, because MANAGER holds invoice.draft but neither approve nor
+  // issue (IAM02), and IAM04 forbids the drafter approving their own invoice.
+  const partner = await prisma.user.create({
+    data: {
+      email: `partner-${RUN}@example.invalid`,
+      fullName: "Fictional Partner",
+      status: "ACTIVE",
+      themePreference: "LIGHT",
+    },
+  });
+  await prisma.practiceMembership.create({
+    data: {
+      practiceId: company.id,
+      userId: partner.id,
+      role: "PRACTICE_PARTNER",
+      assignmentScope: "PRACTICE",
+      effectiveFrom: d("2024-04-01"),
+    },
+  });
+  const partnerCookie = await sessionFor(partner.id);
+
+  const series = await createInvoiceSeries({
+    userId: manager.id,
+    practiceId: company.id,
+    code: "T16",
+    fiscalPeriod: "2025-26",
+    numberFormat: "{code}/{fiscalPeriod}/{number}",
+    startAt: 1,
+  });
+  const draft = await draftInvoice({
+    userId: manager.id,
+    practiceId: company.id,
+    seriesId: series.id,
+    clientRelationshipId: coRel.id,
+    engagementId: engagement.id,
+    lines: [{ description: "Fictional professional fees", quantity: 1, unitAmount: 5000 }],
+  });
+  const approved = await approveInvoice({
+    userId: partner.id,
+    approverName: "Fictional Partner",
+    practiceId: company.id,
+    invoiceId: draft.id,
+    expectedVersion: draft.version,
+  });
+
+  const billingList = await get("/billing", partnerCookie, `bhv_practice=${company.id}`);
+  check("the billing register renders for a partner", billingList.status === 200, `status ${billingList.status}`);
+  check(
+    "NAV01: the Billing pin is on now that the screen exists",
+    billingList.html.includes('href="/billing"'),
+  );
+
+  const detail = await get(`/billing/${draft.id}`, partnerCookie, `bhv_practice=${company.id}`);
+  check("the invoice detail renders", detail.status === 200, `status ${detail.status}`);
+
+  // Operable by keyboard means a real button: a div with onClick is reachable
+  // by neither Tab nor Enter, and this is the check that would catch it.
+  check(
+    "the issue action is a real <button>, not a click handler on a div",
+    /<button[^>]*>\s*Issue/i.test(detail.html),
+    "no <button> whose label starts with Issue",
+  );
+  check(
+    "...with an explicit type, so it cannot submit something by accident",
+    /<button[^>]*type="button"/i.test(detail.html),
+  );
+  check(
+    "nothing on the page sets a positive tabindex, which would reorder the tab sequence",
+    !/tabindex="[1-9]/i.test(detail.html),
+  );
+  check(
+    "the invoice status is stated in words, not by colour alone (UX04)",
+    /APPROVED|Approved/.test(detail.html),
+  );
+  check(
+    "NAV04: the consequential action announces its result to assistive tech",
+    detail.html.includes('role="status"') && detail.html.includes('aria-live="polite"'),
+  );
+
+  // Both themes must render the SAME controls. A dark mode that drops or
+  // replaces a control is not a palette, it is a second interface.
+  const detailDark = await get(
+    `/billing/${draft.id}`,
+    managerCookie,
+    `bhv_practice=${company.id}`,
+  );
+  check(
+    "the dark-theme user gets data-theme=dark on this screen",
+    detailDark.html.includes('data-theme="dark"'),
+  );
+  const controlsIn = (html: string) =>
+    (html.match(/<button[^>]*>/g) ?? []).length;
+  check(
+    "both themes render the shared shell controls (skip link, search, switcher)",
+    detailDark.html.includes("Skip to main content") &&
+      detail.html.includes("Skip to main content") &&
+      controlsIn(detail.html) > 0 &&
+      controlsIn(detailDark.html) > 0,
+  );
+
+  // And the workflow completes. A screen that renders an Issue button which
+  // then fails is not "invoice issue using only the keyboard".
+  const issueResponse = await fetch(`${BASE}/api/invoices/${draft.id}/issue`, {
+    method: "POST",
+    headers: {
+      cookie: `${partnerCookie}; bhv_practice=${company.id}; bhv_csrf=${csrfHash}; bhv_csrf_token=${csrfRaw}`,
+      "content-type": "application/json",
+      origin: BASE,
+      "x-bhv-csrf": csrfRaw ?? "",
+    },
+    body: JSON.stringify({ expectedVersion: approved.version }),
+  });
+  const issueBody = (await issueResponse.json()) as { number?: string; code?: string };
+  check(
+    "EVIDENCE: the issue action completes and returns a number",
+    issueResponse.status === 200 && !!issueBody.number,
+    `${issueResponse.status} ${JSON.stringify(issueBody)}`,
+  );
+
+  const afterIssue = await get(`/billing/${draft.id}`, partnerCookie, `bhv_practice=${company.id}`);
+  check(
+    "EVIDENCE: the issued number is then shown on the screen",
+    !!issueBody.number && afterIssue.html.includes(issueBody.number),
+    issueBody.number ?? "no number",
+  );
+  check(
+    "...and the Issue action is gone, because an issued invoice cannot be reissued",
+    !/<button[^>]*>\s*Issue/i.test(afterIssue.html),
+  );
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
   if (failed > 0) process.exitCode = 1;

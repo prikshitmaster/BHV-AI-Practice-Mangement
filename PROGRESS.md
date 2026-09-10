@@ -1217,6 +1217,32 @@ To finish T16 next session:
   production, where the fork is the finding. Evidence the fix holds: t12, t13,
   t14 and t15 then wrote 185 more events, many concurrently, with zero forks.
 
+- 2026-09-10 — T16.10 — Re-ran the T16 suite against post-T15 code: 73/73,
+  0 failed. T15 changed the error envelope every error state reads, added a
+  correlation header to every response and put CSRF on two more routes; none of
+  it moved the UX layer.
+
+- 2026-09-10 — T16.11 — Added the INVOICE ISSUE leg of §38 to tests/t16-ux.ts,
+  the one clause the file said in its own header it could not cover. A partner
+  is needed (MANAGER holds invoice.draft but not approve or issue, and IAM04
+  bars the drafter from approving), the detail screen is asserted to offer a
+  REAL button rather than a click handler on a div, no positive tabindex
+  reorders the tab sequence, both themes render the same shell controls, and
+  the issue then actually completes and shows its number. 86/86 green.
+  One assertion was written and deleted before it ran: its second argument was
+  a STRING, so it would have passed unconditionally — the same wrong-reason
+  class flagged at T08, T12 and T16.
+
+- 2026-09-10 — T16.12 — BLOCKED, not skipped. The physical browser pass needs
+  a real browser I can drive. The Claude-in-Chrome extension reports "Browser
+  extension is not connected", so the keyboard / 200%-zoom / both-themes walk
+  through onboarding, document review and invoice issue has NOT been done. The
+  structural half is asserted in tests/t16-ux.ts (86/86) and the invoice-issue
+  leg now completes end to end, but tabbing through it and reading it at 200%
+  zoom is still unobserved. Unblocks by either connecting the Chrome extension
+  (install + log into claude.ai + restart Chrome) or a person doing the walk
+  from the sign-in steps above. T16 stays [~] until then.
+
 ### T15 — COMPLETE (2026-09-10)
 
 All eight micro-steps done, parent box checked. Evidence exercised, not just

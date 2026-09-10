@@ -571,6 +571,21 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
     themes) — the structural half is asserted in t16-ux.ts, the physical
     half still needs a person at a browser. See PROGRESS.md for the
     sign-in steps and `npm run dev:walk`.
+  - [x] T16.10 — Re-run `npm run test:t16` against post-T15 code. T15 changed
+    the error envelope every screen's error state reads, added the correlation
+    header to every response and put CSRF on two more routes; t16 has not run
+    since. Fix whatever moved.
+  - [x] T16.11 — The INVOICE ISSUE leg of §38's evidence, which t16-ux.ts
+    says in its own header it does not cover because T14 did not exist.
+    T14 exists now: assert the issue action is reachable and operable by
+    keyboard alone, in both themes, against the real rendered `/billing`
+    screens.
+  - [ ] T16.12 — The real browser pass, in Chrome, not asserted from HTML:
+    tab through client onboarding, document review and invoice issue with no
+    pointer, in light AND dark, at 100% and 200% zoom. Record what is actually
+    observed — a focus order that skips, a control that leaves the viewport at
+    200%, a state distinguished by colour alone — rather than restating the
+    structural assertions t16-ux.ts already makes.
 
 - [ ] **T17 — Reports shell.** Implement REP01 (PRD §40): filtered
   reports with refresh time, formula definition, record count; empty

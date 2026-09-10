@@ -1704,3 +1704,49 @@ real, needed, already tested at the unit level, and should stay.
 
 Not yet fixed as of this note. Whoever picks up T15.7/T15.8 or T06 next
 should do this before running either suite.
+
+**UPDATE (2026-09-11): fixed.** `src/proxy.ts` now carries both bodies —
+the T06 CSP/HSTS/frame headers and CSRF pair, and the T15 correlation ID —
+merged into one file exactly as this note recommended. Confirmed by reading
+the file directly: all of it is present. Leaving the above in place as the
+record of what the regression was and how it was found, since deleting it
+would lose the lesson (see "Read a file before you overwrite it" in the
+things-that-will-bite-you list above, which already captured this).
+
+## 2026-09-11 — demo data extended to cover T12/T13, plus reports evidence
+
+`scripts/seed-demo-data.ts` only covered T02/T07-T11/T14. Extended it (still
+fictional-only, still idempotent for the core dataset) to add:
+
+- **Two more obligations, both FILED** (one on time, one late) — without
+  these, `on-time-filing-rate` (T17/REP01) had nothing to compute and always
+  showed "not available." Verified against the real database: the new
+  `filedAt` field and `FILED` status create cleanly (tested directly, since
+  `tsc` cannot catch a bad Prisma `create` — see the existing note on that).
+- **T12 Communication**: one `MessageThread` (CLIENT_VISIBLE) with an
+  INTERNAL_NOTE message and an OUTBOUND_TO_CLIENT message, plus a
+  `ClientRequest` + item for Meridian Textiles asking for a purchase
+  register. Verified through the real portal API that the internal note
+  never appears and the request item does.
+- **T13 Portal reachability**: two `PracticeSupportContact` rows (one
+  verified, shown; one not, withheld — POR05) and a portal invitation that
+  is now issued FRESH ON EVERY RUN of `seed:demo`, even when the core
+  dataset already exists, since invitations are single-use and there was
+  previously no way to get a new portal link without re-running the whole
+  T13 test harness. Verified live: redeemed a real invitation via
+  `/api/portal/invitations/accept`, confirmed the request item renders on
+  `/portal`, confirmed the internal note is absent, and confirmed the
+  verified/unverified support-contact split on `/portal/help`.
+
+Regression: `npm run test:t12` 106/106, `npm run test:t13` 61/61,
+`npm run test:t17` 46/46 — all still green after the change.
+
+New file `DEMO-DATA-EXPLAINED.md` — a plain-language tour of what the demo
+data contains and exactly which screen shows it, written for a non-technical
+reader. Cross-checked against the actual page source before writing it (not
+just described from memory) — caught and corrected two wrong claims in the
+process: the client workspace page has no "Jobs" tab (jobs only show in
+queue screens like My work) and no "Communication" section (message threads
+have no viewing screen anywhere yet, staff or portal — only the client
+request itself is visible, via "Open requests"). That gap is now recorded
+in the doc itself, not just here.

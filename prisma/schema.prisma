@@ -201,6 +201,10 @@ model Practice {
   feeArrangements     FeeArrangement[]
   creditNotes         CreditNote[]
   downtimeWorkRecords DowntimeWorkRecord[]
+  processingActivities   ProcessingActivity[]
+  regulatoryRequirements RegulatoryRequirement[]
+  securityIncidents      SecurityIncident[]
+  erasureRequests        ErasureRequest[]
 
   // IAM04: invoices above this value require independent review.
   invoiceApprovalThreshold Decimal @default(0) @db.Decimal(18, 2)
@@ -1184,6 +1188,7 @@ model Engagement {
   blocks      EngagementBlock[]
   messageThreads MessageThread[]
   feeArrangements FeeArrangement[]
+  erasureRequests ErasureRequest[]
 
   @@unique([id, practiceId])
   @@index([practiceId, state])
@@ -2383,9 +2388,51 @@ model RetentionPolicy {
   effectiveFrom DateTime  @db.Date
   effectiveTo   DateTime? @db.Date
 
+  // PRV06 (T19). A schedule is keyed by record class, governing rule, trigger
+  // and hold. Two kinds of rule, deliberately not one number:
+  //  RETAIN_AT_LEAST — a floor (a statute says keep it this long). A floor is
+  //    never a purge timer: reaching it makes deletion ALLOWED, not due.
+  //  DELETE_AFTER    — a ceiling (e.g. a data-minimisation rule, once it is
+  //    operative). A ceiling can never cut below a longer floor or a hold.
+  direction RetentionDirection @default(RETAIN_AT_LEAST)
+  trigger   RetentionTrigger   @default(CREATED)
+  // Periods shorter than a year (CERT-In's rolling 180 days) are in days; when
+  // set, retainDays wins over retainYears.
+  retainDays Int?
+  // What the schedule reaches. BACKUP is listed so a schedule says out loud
+  // whether backups follow it — silence there is how deleted data lingers.
+  covers RetentionCoverage[] @default([ORIGINAL, DERIVATIVE])
+  // PRV02 link: a rule that exists only because of a regulatory requirement
+  // applies only while that requirement is OPERATIONAL.
+  regulatoryRequirementId String?
+
+  createdByUserId String?
   createdAt DateTime @default(now())
 
-  @@unique([practiceId, recordClass, effectiveFrom])
+  @@unique([practiceId, recordClass, direction, basis, effectiveFrom])
+  @@index([practiceId, recordClass])
+}
+
+enum RetentionDirection {
+  RETAIN_AT_LEAST
+  DELETE_AFTER
+}
+
+enum RetentionTrigger {
+  CREATED
+  ENGAGEMENT_CLOSED
+  FINANCIAL_YEAR_END
+  RELATIONSHIP_ENDED
+  LAST_ACTIVITY
+}
+
+enum RetentionCoverage {
+  ORIGINAL
+  DERIVATIVE
+  EMAIL
+  AI_OUTPUT
+  ICT_LOG
+  BACKUP
 }
 
 model LegalHold {
@@ -4025,4 +4072,303 @@ model DowntimeWorkRecord {
   version Int @default(1)
 
   @@index([practiceId, reconciledAt])
+}
+
+// ---------------------------------------------------------------------------
+// T19 — privacy, retention and regulatory clocks (PRD §36 PRV01, PRV02, PRV04,
+// PRV06). PRV03 (rights requests) and PRV05 (DPDP breach workflow) are R1.
+// ---------------------------------------------------------------------------
+
+/// PRV01: "Do not treat consent as the only possible basis for every
+/// professional record." Most of a CA practice's records exist because a
+/// statute or a professional duty requires them, and recording them as
+/// consent-based would imply a withdrawal could erase them.
+enum LegalBasis {
+  LEGAL_OBLIGATION
+  PROFESSIONAL_DUTY
+  CONTRACT_PERFORMANCE
+  LEGITIMATE_USE
+  CONSENT
+}
+
+enum ProcessingStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+/// PRV01 processing register — one row per processing purpose, per practice.
+/// Each practice is responsible for its own register; the two are never merged.
+model ProcessingActivity {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  name            String
+  purpose         String
+  dataCategories  String[]
+  source          String
+  accessRoles     PracticeRole[]
+  recipients      String[]
+  vendor          String?
+  // Free text on purpose: the hosting decision (PRD §46) is still open, and
+  // the register must be able to say "UNCONFIRMED" rather than guess.
+  hostingLocation String
+  retentionClass  String
+  legalBasis      LegalBasis
+  // The specific statute, clause or engagement term — a basis without an
+  // authority is an assertion, not a record.
+  legalAuthority  String
+  noticeReference        String?
+  consentRecordReference String?
+
+  status    ProcessingStatus @default(DRAFT)
+  ownerName String
+
+  createdByUserId String
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([practiceId, name])
+  @@unique([id, practiceId])
+}
+
+/// PRV02: "Track Enacted, Notified, Operational, Prospective and Superseded
+/// requirements with sources and effective rules."
+enum RegulatoryState {
+  ENACTED
+  NOTIFIED
+  PROSPECTIVE
+  OPERATIONAL
+  SUPERSEDED
+}
+
+model RegulatoryRequirement {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  code            String
+  title           String
+  instrument      String
+  state           RegulatoryState
+  sourceReference String
+  sourceDate      DateTime  @db.Date
+  // The date the rule takes effect, where one is known. OPERATIONAL is refused
+  // without one that has arrived.
+  effectiveFrom   DateTime? @db.Date
+  effectiveRule   String
+
+  supersededByCode String?
+
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stateChanges RegulatoryStateChange[]
+
+  @@unique([practiceId, code])
+  @@unique([id, practiceId])
+}
+
+/// Append-only history of a requirement's legal state, so an incident assessed
+/// last year can be read against the state the law had THEN.
+model RegulatoryStateChange {
+  id            String                @id @default(uuid())
+  practiceId    String
+  requirementId String
+  requirement   RegulatoryRequirement @relation(fields: [requirementId, practiceId], references: [id, practiceId])
+
+  fromState       RegulatoryState?
+  toState         RegulatoryState
+  sourceReference String
+  sourceDate      DateTime  @db.Date
+  effectiveFrom   DateTime? @db.Date
+  reason          String
+
+  changedByUserId String
+  changedByName   String
+  changedAt       DateTime @default(now())
+
+  @@index([requirementId, changedAt])
+}
+
+/// PRV04: "Keep this assessment distinct from routine support incidents and
+/// future DPDP clocks."
+enum IncidentTrack {
+  SECURITY
+  ROUTINE_SUPPORT
+}
+
+enum CertInAssessment {
+  PENDING
+  APPLICABLE
+  NOT_APPLICABLE
+}
+
+enum RootCauseStatus {
+  UNKNOWN
+  INVESTIGATING
+  IDENTIFIED
+}
+
+enum IncidentClockRegime {
+  CERT_IN_6H
+  DPDP_AFFECTED_PERSONS
+  DPDP_BOARD_INITIAL
+  DPDP_BOARD_DETAILED_72H
+}
+
+model SecurityIncident {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  title   String
+  track   IncidentTrack
+  summary String
+
+  // The clocks run from AWARENESS: not from when the record was typed in, and
+  // not from when the root cause was found.
+  awarenessAt DateTime
+  recordedAt  DateTime @default(now())
+
+  certInAssessment CertInAssessment @default(PENDING)
+  certInCategory   String?
+  certInReason     String?
+  assessedByUserId String?
+  assessedByName   String?
+  assessedAt       DateTime?
+
+  rootCause     RootCauseStatus @default(UNKNOWN)
+  rootCauseNote String?
+
+  // The T06 alert that raised it, if one did. Ids only.
+  securityAlertId String?
+
+  reportedByUserId String
+  reportedByName   String
+  closedAt         DateTime?
+
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reports            IncidentReport[]
+  awarenessRevisions IncidentAwarenessRevision[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, closedAt])
+}
+
+/// A report actually made to an authority under one regime. A clock's state
+/// is derived from these and the awareness time, never stored as a flag that
+/// could say "met" without a report behind it.
+model IncidentReport {
+  id         String           @id @default(uuid())
+  practiceId String
+  incidentId String
+  incident   SecurityIncident @relation(fields: [incidentId, practiceId], references: [id, practiceId])
+
+  regime           IncidentClockRegime
+  reportedAt       DateTime
+  reference        String
+  recordedByUserId String
+  recordedByName   String
+  createdAt        DateTime @default(now())
+
+  @@unique([incidentId, regime])
+}
+
+/// Awareness corrections. Only an EARLIER time is accepted: re-dating
+/// awareness later would extend a statutory clock after the fact.
+model IncidentAwarenessRevision {
+  id         String           @id @default(uuid())
+  practiceId String
+  incidentId String
+  incident   SecurityIncident @relation(fields: [incidentId, practiceId], references: [id, practiceId])
+
+  previousAwarenessAt DateTime
+  newAwarenessAt      DateTime
+  reason              String
+  revisedByUserId     String
+  revisedByName       String
+  revisedAt           DateTime @default(now())
+}
+
+/// PRV06 acceptance evidence: "An erasure request for an engagement under
+/// legal hold is reviewed and partially actioned where appropriate, with
+/// reasons." (The verified rights-request workflow around it is PRV03, R1.)
+enum ErasureState {
+  REQUESTED
+  REVIEWED
+  PARTIALLY_ACTIONED
+  ACTIONED
+  ALL_RETAINED
+}
+
+enum ErasureItemKind {
+  DOCUMENT
+  CONTACT_PHONE
+  CONTACT_EMAIL
+  AUDIT_TRAIL
+}
+
+enum ErasureDecision {
+  ERASE
+  RETAIN
+}
+
+model ErasureRequest {
+  id           String     @id @default(uuid())
+  practiceId   String
+  practice     Practice   @relation(fields: [practiceId], references: [id])
+  engagementId String
+  engagement   Engagement @relation(fields: [engagementId, practiceId], references: [id, practiceId])
+  contactId    String?
+
+  receivedVia String
+  requestText String
+  state       ErasureState @default(REQUESTED)
+
+  requestedByUserId String
+  requestedByName   String
+  requestedAt       DateTime @default(now())
+
+  reviewedByUserId String?
+  reviewedByName   String?
+  reviewedAt       DateTime?
+  actionedAt       DateTime?
+  outcomeSummary   String?
+
+  version Int @default(1)
+
+  items ErasureItem[]
+
+  @@unique([id, practiceId])
+  @@index([practiceId, state])
+}
+
+model ErasureItem {
+  id         String         @id @default(uuid())
+  practiceId String
+  requestId  String
+  request    ErasureRequest @relation(fields: [requestId, practiceId], references: [id, practiceId])
+
+  kind     ErasureItemKind
+  targetId String
+  label    String
+
+  // What the system found — a legal hold, a retention floor, audit evidence.
+  // When set, ERASE is refused whatever the reviewer chooses.
+  mustRetainReason String?
+
+  decision ErasureDecision?
+  reason   String?
+
+  actionedAt        DateTime?
+  deletionRequestId String?
+
+  @@unique([requestId, kind, targetId])
 }

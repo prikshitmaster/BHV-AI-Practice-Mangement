@@ -158,6 +158,7 @@ async function main() {
     ["/practice", "Practice"],
     ["/team", "Team"],
     ["/continuity", "Continuity"],
+    ["/privacy", "Privacy and incidents"],
     [clientRel ? `/clients/${clientRel.id}` : "", "Client workspace"],
     [job ? `/jobs/${job.id}` : "", "Job detail"],
     [document ? `/documents/${document.id}` : "", "Document detail"],

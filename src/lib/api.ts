@@ -36,6 +36,7 @@ import { SeparationOfDutiesError } from "@/lib/separation-of-duties";
 import { VersionConflictError, SubjectNotFoundError } from "@/lib/concurrency";
 import { ApprovalError } from "@/lib/approvals";
 import { ContinuityError } from "@/lib/continuity";
+import { PrivacyError } from "@/lib/privacy-register";
 
 export type ApiErrorBody = {
   error: string;
@@ -130,6 +131,13 @@ export function errorResponse(e: unknown): NextResponse {
   // not found, remediation owner missing). Written for the person who has to
   // act on them; a not-found keeps the 404 shape and names no record.
   if (e instanceof ContinuityError) {
+    return fail(e.status, e.code, e.message);
+  }
+
+  // PRV01/02/04/06 refusals (consent needs a notice, Operational needs a date,
+  // an item must be retained, awareness only moves earlier). Each names the
+  // rule so the person can act on it; a not-found keeps the 404 shape.
+  if (e instanceof PrivacyError) {
     return fail(e.status, e.code, e.message);
   }
 

@@ -682,6 +682,101 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
     Production gaps that do NOT block this task's test but DO block go-live are
     listed in BACKUP-RECOVERY.md §7 (no backup scheduler above all).
 
+## Phase 7 — R0 requirements missing from the original task list
+
+Added 2026-09-11. A scan of PRD.md for every `XXX00 | R0` requirement against
+this file found 20 of the 97 R0 IDs named by no task — SPEC.md §3's module
+list skipped PRD §28, §31, §36, §41, §43 and §45. PRD §47 and SPEC §2 both
+count them as R0, so R0's exit gate cannot pass without them.
+
+- [x] **T19 — Privacy, retention and regulatory clocks.** Implement PRV01,
+  PRV02, PRV04, PRV06 (PRD §36). PRV03/PRV05 are R1.
+  *Test: an erasure request for an engagement under legal hold is reviewed
+  and partially actioned where appropriate, with reasons. The incident
+  screen shows awareness time and the correct independent reporting
+  clocks, even if root cause investigation is incomplete.*
+  - [x] T19.1 — Schema + migration: ProcessingActivity (PRV01),
+    RegulatoryRequirement + RegulatoryStateChange (PRV02), SecurityIncident +
+    IncidentClock + awareness revisions (PRV04), RetentionPolicy extended with
+    trigger / coverage / floor-vs-ceiling / governing requirement (PRV06),
+    ErasureRequest + ErasureItemDecision; new permission actions.
+  - [x] T19.2 — `src/lib/privacy-register.ts`: PRV01 register (consent is not
+    the default basis; CONSENT needs a notice/consent record) and PRV02 state
+    machine (OPERATIONAL needs a source and an effective date that has
+    arrived; history never rewritten; `isOperational(code, at)`).
+  - [x] T19.3 — `src/lib/retention.ts`: PRV06 decision = the longest
+    applicable floor; a ceiling tied to a non-operational requirement does not
+    apply; 180-day ICT log floor is never a purge timer. Fix found while
+    reading DOC06: holds are only a flag set at placement time, so a document
+    filed later into a held engagement is deletable — evaluate live LegalHold
+    rows by scope instead. Also `applyRetention`/`placeLegalHold` have no
+    permission check and `applyRetention` updates by id without practice.
+  - [x] T19.4 — `src/lib/erasure.ts`: erasure request over an engagement;
+    review produces one decision per item (ERASE / RETAIN + reason);
+    execution acts only on ERASE items, through the DOC06 pipeline for
+    documents; requester cannot review their own.
+  - [x] T19.5 — `src/lib/incidents.ts`: PRV04 incident with awareness time,
+    CERT-In applicability assessment, 6 h clock, DPDP clocks shown
+    NOT_OPERATIVE per PRV02, routine support incidents with no regulatory
+    clock; awareness corrections are revisions, not edits.
+  - [x] T19.6 — `tests/t19-privacy.ts` acceptance test, run BEFORE routes.
+  - [x] T19.7 — API routes + `/privacy` screen (register, regulatory state,
+    retention, erasure review, incidents with clocks), five UI states.
+  - [x] T19.8 — Run acceptance test + full regression suite. 1,097 assertions
+    green in two passes, plus privacy:walk 21/21 and dev:walk (/privacy 200).
+
+- [ ] **T20 — Connector configuration.** Implement INT01 (PRD §31). INT02 is
+  R1.
+  *Test: connector config stores practice, owner, purpose, environment,
+  scope, provider, credential REFERENCE and status; a connection test
+  discloses no secret; dev and production credentials are separate;
+  rotating one practice's token does not disrupt the other practice.*
+
+- [ ] **T21 — Controlled import.** Implement MIG01-03 (PRD §43) and the R0
+  Excel/CSV row of the PRD §31 integration table.
+  *Test: import the same client file twice; the second import is identified
+  and cannot duplicate records. The owner signs off practice assignments
+  and opening balances. Restore the pre-import snapshot in an isolated
+  test and verify rollback readiness.*
+
+- [ ] **T22 — Practice menu, manual and sample practice.** Implement KNW01,
+  KNW02, KNW04 (PRD §28). KNW03/05/06 are R1.
+  *Test: from a rejected document upload, open the relevant recovery guide
+  directly. Reset the demo practice and confirm production counts are
+  unchanged. The downloadable manual and the in-app help are built from
+  the same content.*
+
+- [ ] **T23 — Measurable quality.** Implement NFR01-03 (PRD §41).
+  *Test: load test with export workers active; user requests and reminders
+  still meet the agreed service class, reported as p50/p95/p99, error rate
+  and duration. If a target fails, document the bottleneck, remediation
+  and revised acceptance plan. Financial precision cases: split
+  allocations, reversals, negative credit notes, rate changes and
+  financial year boundaries.*
+
+- [ ] **T24 — Handover and onboarding packs.** Implement DEL01-04 (PRD §45)
+  and MIG04-05 (PRD §43) — documentation and reproducibility, not
+  features.
+  *Test: a clean checkout builds, migrates and passes the suite from the
+  written instructions alone; the pack contains every DEL02/DEL03/DEL04
+  item or names it as missing. "A second authorised person can deploy and
+  restore without the original engineer" needs a second person and is
+  recorded Unverified until one does it.*
+
+- [ ] **T25 — R0 exit gate.** PRD §6 ("Cross practice isolation, restore
+  drill and realistic client workflow pass") and every row of the PRD §42
+  scenario table, with an evidence pack per PRD §42 (test ID, requirement
+  IDs, build, dataset version, steps, expected, actual, defects, retest).
+  Unexecuted rows are marked Unverified, never assumed.
+  Gaps already found against §42 on 2026-09-11, to close here:
+  concurrent/retried recurrence runs (T09 only runs sequentially); a
+  repeated receipt callback must not duplicate a receipt; a client upload
+  for the wrong period is flagged; a temporary grant EXPIRES (not only
+  revokes) across API, search, object link and export; phone-width
+  journeys in both themes; contextual manual matches real fields and
+  error messages (needs T22). AI misuse is R2 — record as not applicable
+  to R0, with the route scan showing no AI surface exists.
+
 ---
 
 ## After R0 is complete

@@ -37,6 +37,7 @@ import { recordEvent } from "@/lib/audit";
 import { assertCan, can, resolveMembership } from "@/lib/permissions";
 import { PracticeAccessError, getAccessiblePracticeIds } from "@/lib/practice-scope";
 import { deleteObject, documentObjectKey } from "@/lib/object-store";
+import { activeHoldsForDocument, retentionDecision } from "@/lib/retention";
 import type { IntakeReceipt } from "@/lib/document-intake";
 
 export class DocumentError extends Error {
@@ -1324,34 +1325,46 @@ export async function applyRetention(params: {
   recordClass: string;
   from?: Date;
 }) {
-  const now = params.from ?? new Date();
-  const policy = await prisma.retentionPolicy.findFirst({
-    where: {
-      practiceId: params.practiceId,
-      recordClass: params.recordClass,
-      effectiveFrom: { lte: now },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
-    },
-    orderBy: { effectiveFrom: "desc" },
+  // T19: applying a retention class is a PRV06 decision, and the update is
+  // bound to the practice — it used to be neither permission-checked nor
+  // scoped, so any caller could re-date another firm's document by id.
+  await assertCan(params.actorUserId, params.practiceId, "privacy.manage");
+  const trigger = params.from ?? new Date();
+
+  // PRV06: the longest applicable floor wins, not whichever row came first.
+  const decision = await retentionDecision({
+    practiceId: params.practiceId,
+    recordClass: params.recordClass,
+    triggerDate: trigger,
   });
-  if (!policy) {
+  if (!decision.retainUntil) {
     throw new DocumentError(
       `No retention policy is in force for record class ${params.recordClass}`,
       "NO_RETENTION_POLICY",
     );
   }
+  const governing = decision.floors.reduce((a, b) => (b.until > a.until ? b : a));
 
-  const until = new Date(now);
-  until.setUTCFullYear(until.getUTCFullYear() + policy.retainYears);
-
-  return prisma.document.update({
-    where: { id: params.documentId },
+  const updated = await prisma.document.updateMany({
+    where: { id: params.documentId, practiceId: params.practiceId },
     data: {
-      retentionPolicyId: policy.id,
-      retentionUntil: until,
-      retentionBasis: policy.basis,
+      retentionPolicyId: governing.policyId,
+      retentionUntil: decision.retainUntil,
+      retentionBasis: decision.floors.map((f) => f.basis).join("; "),
     },
   });
+  if (updated.count === 0) throw new DocumentError("Not found", "DOCUMENT_NOT_FOUND", 404);
+
+  await recordEvent({
+    action: "RETENTION_APPLIED",
+    targetType: "Document",
+    targetId: params.documentId,
+    result: "SUCCESS",
+    actorUserId: params.actorUserId,
+    practiceId: params.practiceId,
+    afterMeta: { recordClass: params.recordClass, retainUntil: decision.retainUntil.toISOString() },
+  });
+  return prisma.document.findUniqueOrThrow({ where: { id: params.documentId } });
 }
 
 export async function placeLegalHold(params: {
@@ -1362,6 +1375,27 @@ export async function placeLegalHold(params: {
   engagementId?: string;
   clientRelationshipId?: string;
 }) {
+  // T19: a hold is a PRV06 decision, and every scope it names must belong to
+  // the practice placing it.
+  await assertCan(params.actorUserId, params.practiceId, "privacy.manage");
+  if (!params.documentId && !params.engagementId && !params.clientRelationshipId) {
+    throw new DocumentError("A legal hold must name what it holds", "HOLD_SCOPE_REQUIRED");
+  }
+  const inScope = await Promise.all([
+    params.documentId
+      ? prisma.document.count({ where: { id: params.documentId, practiceId: params.practiceId } })
+      : 1,
+    params.engagementId
+      ? prisma.engagement.count({ where: { id: params.engagementId, practiceId: params.practiceId } })
+      : 1,
+    params.clientRelationshipId
+      ? prisma.clientRelationship.count({
+          where: { id: params.clientRelationshipId, practiceId: params.practiceId },
+        })
+      : 1,
+  ]);
+  if (inScope.some((n) => n === 0)) throw new PracticeAccessError(params.actorUserId, params.practiceId);
+
   const actor = await prisma.user.findUnique({
     where: { id: params.actorUserId },
     select: { fullName: true },
@@ -1423,7 +1457,12 @@ export async function checkDeletionEligibility(params: {
   });
   if (!doc) return { eligible: false, reason: "Document not found" };
 
-  if (doc.legalHold) return { eligible: false, reason: "Document is under legal hold" };
+  // The flag is kept for display, but the LIVE hold rows decide: a document
+  // filed into a held engagement after the hold was placed never had the flag
+  // set, and used to be deletable (found in T19).
+  if (doc.legalHold || (await activeHoldsForDocument(params.practiceId, doc.id)).length > 0) {
+    return { eligible: false, reason: "Document is under legal hold" };
+  }
   if (doc.lockedAt) {
     return { eligible: false, reason: "Document belongs to a finalised set" };
   }

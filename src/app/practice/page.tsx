@@ -171,6 +171,16 @@ export default async function PracticePage() {
         <Link href="/continuity">Service status and continuity</Link>
       </div>
 
+      <h2>Privacy and incidents</h2>
+      <div className="card">
+        <p style={{ marginTop: 0 }}>
+          Report a suspected security incident — reporting clocks run from when you became aware.
+          Partners also keep the processing and regulatory registers, retention schedules and
+          erasure review here.
+        </p>
+        <Link href="/privacy">Privacy and incidents</Link>
+      </div>
+
       <h2>Guides</h2>
       <EmptyState
         title="Playbooks and the practice manual are not built yet"

@@ -1972,3 +1972,22 @@ in the doc itself, not just here.
   (RPO target unmet until something runs `npm run backup` hourly); no approved
   offsite / immutable location (follows PRD §46); key escrow and the offline
   revocation ledger are procedures on paper, unrehearsed.
+
+- 2026-09-11 — R0 COVERAGE GAP FOUND — before running the R0 exit gate, a scan
+  of every `XXX00 | R0` ID in PRD.md against TASKS.md found 20 of the 97 R0
+  requirements named by NO task: KNW01/02/04, INT01, PRV01/02/04/06,
+  NFR01-03, MIG01-05, DEL01-04 (SPEC §3's module list skipped PRD §28, §31,
+  §36, §41, §43, §45). R0 is therefore NOT complete. Added T19-T24 for them
+  and T25 for the exit gate itself (with six §42 scenario gaps already found
+  against the existing suites, listed under T25). T19 started.
+
+- 2026-09-11 — T19.1 — schema + migration 20260911120000_privacy_retention_clocks (ProcessingActivity, RegulatoryRequirement/StateChange, SecurityIncident/IncidentReport/IncidentAwarenessRevision, ErasureRequest/Item; RetentionPolicy gains direction/trigger/retainDays/covers/regulatoryRequirementId) — additive only, applied, no drift — not yet tested
+- 2026-09-11 — T19.2-T19.5 — privacy-register.ts (PRV01/PRV02 + stateAt history), retention.ts (floors vs ceilings, live-hold lookup, ICT-log posture), erasure.ts (per-item review, DOC06 pipeline), incidents.ts (derived CERT-In/DPDP clocks); documents.ts fixed: applyRetention/placeLegalHold now privacy.manage-gated and practice-scoped, eligibility reads live LegalHold rows — tsc clean — not yet tested
+- 2026-09-11 — T19.6 — tests/t19-privacy.ts written and run BEFORE routes: 94/94. First runs found (a) a nested create naming practiceId that Prisma refuses (tsc clean, again), (b) a real semantic defect: DPDP clocks read the register as it stood at awareness time, so a duty recorded after the incident could never show overdue — clocks and retention now use legalStandingAt (current knowledge of the law at T); stateAt kept for what-did-we-believe-then reads — PASS
+- 2026-09-11 — T19.7 — 9 API routes (/api/incidents, /api/incidents/[id], /api/privacy/{register,regulatory,retention,erasure}[/id]) + /privacy screen (incidents with per-regime clocks, erasure review, retention, registers; five states) + Practice link; PrivacyError mapped in the API envelope. npm run privacy:walk 21/21 over HTTP — PASS
+
+- 2026-09-11 — T19 — COMPLETE. Privacy, retention and regulatory clocks (PRV01, PRV02, PRV04, PRV06; PRV03/05 are R1) — tested against the PRD §36 acceptance evidence via `npm run test:t19` (94/94): an erasure request on an engagement under legal hold is reviewed item by item and PARTIALLY actioned with reasons (phone erased, held documents and bytes kept, audit trail retained, a hold placed after review still binds, contacts shared with the other practice refused without naming it); the incident view shows awareness time and independent CERT-In 6 h and DPDP clocks while root cause is UNKNOWN, with DPDP read from the PRV02 register (not tracked / not operative / operative) — PASS. HTTP: `npm run privacy:walk` 21/21.
+  Defects found and fixed on the way: DOC06 deletion eligibility read only the legalHold flag set at placement, so a document filed into a held engagement afterwards was deletable (now reads live LegalHold rows by scope); applyRetention and placeLegalHold had no permission check and applyRetention updated by id without practice scope (now privacy.manage + scoped; the other practice re-dating a document by id is refused 404).
+  Full regression: T02 13, T03 23, T04 37, T05 54, T06 44, T07 55, T16 91 (with dev server); T08 55, T09 60, T10 56, T11 110, T12 106, T13 61, T14 46, T15 50, T17 46, T18 96, T19 94 (without) = 1,097 assertions, all green.
+  OWNER ACTION: the regulatory register ships EMPTY on purpose. The real state of the DPDP Rules and the CERT-In directions must be entered from verified sources (code DPDP-BREACH-INTIMATION for the breach duty); until then every DPDP clock reads "Unknown — not in register". Hosting in Indian jurisdiction stays NOT confirmed until PRD §46 is decided.
+  Next: T20 — Connector configuration (INT01, PRD §31).

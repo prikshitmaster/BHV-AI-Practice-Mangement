@@ -55,7 +55,16 @@ export type Action =
   | "hr.read"
   | "feerate.read"
   | "workpaper.protected.read"
-  | "system.administer";
+  | "system.administer"
+  // PRV01/PRV02/PRV06 (T19): the processing register, the regulatory-state
+  // register, retention schedules, legal holds and erasure review. These are
+  // the practice's legal-accountability decisions, so they sit with partners.
+  | "privacy.manage"
+  // PRV04: anyone on staff must be able to report a suspected incident — a
+  // clock that starts only when a partner hears about it starts late.
+  | "incident.report"
+  // PRV04: assessing CERT-In applicability and recording the report made.
+  | "incident.manage";
 
 /**
  * IAM02 role presets. These are STARTING TEMPLATES — record-level
@@ -77,6 +86,7 @@ const ROLE_CAPABILITIES: Record<PracticeRole, Action[]> = {
     "filing.prepare", "filing.approve",
     "export.run",
     "user.invite", "user.grant_access",
+    "privacy.manage", "incident.report", "incident.manage",
   ],
   PRACTICE_PARTNER: [
     "client.read", "client.write",
@@ -89,6 +99,7 @@ const ROLE_CAPABILITIES: Record<PracticeRole, Action[]> = {
     "filing.prepare", "filing.approve",
     "export.run",
     "user.invite", "user.grant_access",
+    "privacy.manage", "incident.report", "incident.manage",
   ],
   MANAGER: [
     "client.read", "client.write",
@@ -100,6 +111,7 @@ const ROLE_CAPABILITIES: Record<PracticeRole, Action[]> = {
     "invoice.read", "invoice.draft",
     "filing.prepare",
     "export.run",
+    "incident.report",
   ],
   // DOC04 names this role directly: "A reviewer releases an exact version to
   // named portal contacts." Releasing is the reviewer's act, so the capability
@@ -113,6 +125,7 @@ const ROLE_CAPABILITIES: Record<PracticeRole, Action[]> = {
     "recipient.verify",
     "invoice.read",
     "filing.prepare", "filing.approve",
+    "incident.report",
   ],
   // An article prepares work. They cannot approve a filing, issue an invoice,
   // or grant anyone access — the PRD names both explicitly. COM03 extends the
@@ -126,6 +139,7 @@ const ROLE_CAPABILITIES: Record<PracticeRole, Action[]> = {
     "document.read", "document.upload",
     "message.post_internal",
     "filing.prepare",
+    "incident.report",
   ],
   FINANCE: [
     "client.read",
@@ -134,9 +148,12 @@ const ROLE_CAPABILITIES: Record<PracticeRole, Action[]> = {
     "message.post_internal", "message.send_client",
     "invoice.read", "invoice.draft", "invoice.issue",
     "export.run",
+    "incident.report",
   ],
-  HR: [],
-  IT_ADMIN: ["system.administer", "user.invite"],
+  HR: ["incident.report"],
+  // PRV04: IT runs the technical side of a cyber incident, so it may assess
+  // and record reports — still without any professional data authority.
+  IT_ADMIN: ["system.administer", "user.invite", "incident.report", "incident.manage"],
   QUALITY_REVIEWER: [
     "client.read",
     "engagement.read",
@@ -145,6 +162,7 @@ const ROLE_CAPABILITIES: Record<PracticeRole, Action[]> = {
     "message.post_internal",
     "invoice.read",
     "filing.approve",
+    "incident.report",
   ],
   CLIENT_CONTACT: [],
 };

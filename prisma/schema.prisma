@@ -200,6 +200,7 @@ model Practice {
   supportContacts     PracticeSupportContact[]
   feeArrangements     FeeArrangement[]
   creditNotes         CreditNote[]
+  downtimeWorkRecords DowntimeWorkRecord[]
 
   // IAM04: invoices above this value require independent review.
   invoiceApprovalThreshold Decimal @default(0) @db.Decimal(18, 2)
@@ -3243,6 +3244,13 @@ model MessageTemplate {
 enum OutboundState {
   QUEUED
   HELD_QUIET_HOURS
+  /// BCP03: "Pause outbound messages and filings until queued actions are
+  /// reconciled so restoration cannot resend historical communications."
+  /// A restore moves every QUEUED message here. It is a distinct state rather
+  /// than a reuse of SUPPRESSED because these messages were never suppressed
+  /// by a policy decision — they are waiting on a human to confirm they are
+  /// still wanted, and the difference matters to whoever reads the log.
+  HELD_RESTORE_RECONCILIATION
   SUBMITTED
   DELIVERED
   FAILED
@@ -3639,6 +3647,11 @@ model PracticeSupportContact {
 
 enum OutboxState {
   PENDING
+  /// BCP03, same reason as OutboundState.HELD_RESTORE_RECONCILIATION: a
+  /// restored PENDING event would otherwise fire a side effect that already
+  /// happened. The dispatcher only claims PENDING rows, so parking them here
+  /// stops delivery without deleting the evidence that they existed.
+  HELD_RESTORE_RECONCILIATION
   DISPATCHED
   FAILED
   DEAD
@@ -3717,4 +3730,299 @@ model OutboxConsumerReceipt {
 
   @@unique([eventId, consumer])
   @@index([consumer, handledAt])
+}
+
+// ---------------------------------------------------------------------------
+// BCP01-04, BCP06 — backup, recovery and operational continuity (T18, PRD §37)
+// BCP05 (structured export and vendor exit) is R1 and deliberately absent.
+// ---------------------------------------------------------------------------
+
+/// BCP01 names the scope explicitly: "the database, object versions,
+/// configuration, templates, necessary keys / recovery material and audit
+/// events". Each is a separate artifact kind so a backup that silently stopped
+/// capturing one of them shows up as a MISSING ROW, not as a slightly smaller
+/// archive nobody looked at.
+enum BackupArtifactKind {
+  DATABASE_ROWS
+  DATABASE_NATIVE_DUMP
+  OBJECT_MANIFEST
+  OBJECT_PAYLOAD
+  CONFIGURATION
+  TEMPLATE
+  KEY_INVENTORY
+  AUDIT_EVENTS
+}
+
+enum BackupRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model BackupRun {
+  id       String  @id @default(uuid())
+  tenantId String?
+
+  /// The moment the data in this backup was true. RPO is measured from HERE,
+  /// never from completedAt — a run that took twenty minutes did not capture
+  /// the twenty minutes it spent running.
+  dataAsOf    DateTime
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  status        BackupRunStatus @default(RUNNING)
+  failureReason String?
+
+  /// Where the working copy landed, and the separate-failure-domain copy.
+  /// Both are recorded because a copy that lives only beside the database it
+  /// protects is not a backup (BCP01).
+  primaryLocation String
+  offsiteLocation String?
+
+  /// An immutable / offline copy "where feasible". False is an honest answer
+  /// and is reported as a gap rather than quietly omitted.
+  immutableCopy Boolean @default(false)
+
+  encrypted Boolean @default(true)
+  /// The NAME of the key that wrapped it. Never the key.
+  encryptionKeyId String?
+
+  /// SHA-256 over the manifest, so the SET is tamper-evident as a whole and
+  /// not merely artifact by artifact — otherwise a dropped artifact leaves
+  /// every remaining hash still correct.
+  manifestSha256 String
+
+  sizeBytes       BigInt  @default(0)
+  createdByUserId String?
+
+  artifacts BackupArtifact[]
+  restores  RestoreRun[]
+
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+
+  @@index([status, dataAsOf])
+}
+
+model BackupArtifact {
+  id          String    @id @default(uuid())
+  backupRunId String
+  backupRun   BackupRun @relation(fields: [backupRunId], references: [id], onDelete: Cascade)
+
+  kind BackupArtifactKind
+  name String
+
+  /// Hash of the PLAINTEXT bytes. A restore must be able to prove it got back
+  /// what was taken, not merely that some ciphertext decrypted cleanly.
+  sha256      String
+  sizeBytes   BigInt  @default(0)
+  recordCount Int?
+  encrypted   Boolean @default(true)
+  storedAt    String
+
+  createdAt DateTime @default(now())
+
+  @@unique([backupRunId, kind, name])
+  @@index([kind, sha256])
+}
+
+enum RestoreStatus {
+  RUNNING
+  RECONCILING
+  HELD
+  COMPLETED
+  FAILED
+}
+
+/// The reconciliation categories BCP03 requires: object manifests, hashes and
+/// database references, plus the access decisions that must SURVIVE a restore
+/// rather than being rolled back to how they looked before someone was
+/// removed or something was erased.
+enum RestoreCheckCategory {
+  OBJECT_HASH
+  OBJECT_REFERENCE
+  PERMISSION
+  LEGAL_HOLD
+  ERASURE
+  OBLIGATION
+  RECEIPT_BALANCE
+  OUTBOUND_HOLD
+  AUDIT_CHAIN
+}
+
+model RestoreRun {
+  id          String    @id @default(uuid())
+  backupRunId String
+  backupRun   BackupRun @relation(fields: [backupRunId], references: [id])
+
+  targetLabel String
+
+  /// BCP03. Both must be true before a single restored row is written. A
+  /// restore into a reachable environment that can still send is exactly how
+  /// a recovery re-mails last month's invoices.
+  isolated                Boolean
+  externalSendingDisabled Boolean
+
+  dataAsOf  DateTime
+  startedAt DateTime  @default(now())
+  /// When the restored core first answered — the end of RTO.
+  usableAt    DateTime?
+  completedAt DateTime?
+
+  measuredRpoSeconds Int?
+  measuredRtoSeconds Int?
+  rpoTargetSeconds   Int
+  rtoTargetSeconds   Int
+  /// Null until BOTH were measured. An unmeasured target is not a met target.
+  targetsMet Boolean?
+
+  /// BCP03: outbound stays held until reconciliation passes. A null release
+  /// time on a finished restore means it is STILL held, deliberately.
+  outboundHeldFrom         DateTime  @default(now())
+  outboundReleasedAt       DateTime?
+  outboundReleasedByUserId String?
+  quarantinedOutboundCount Int       @default(0)
+
+  status        RestoreStatus @default(RUNNING)
+  failureReason String?
+
+  checks RestoreCheck[]
+  drills RestoreDrill[]
+
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+
+  @@index([status, startedAt])
+}
+
+model RestoreCheck {
+  id           String     @id @default(uuid())
+  restoreRunId String
+  restoreRun   RestoreRun @relation(fields: [restoreRunId], references: [id], onDelete: Cascade)
+
+  category RestoreCheckCategory
+  subject  String
+  expected String
+  actual   String
+  passed   Boolean
+  detail   String?
+
+  checkedAt DateTime @default(now())
+
+  @@index([restoreRunId, category, passed])
+}
+
+/// BCP06 names the three failures a drill must actually rehearse. They are an
+/// enum rather than free text so "we tested recovery" cannot stand in for
+/// "we tested losing the only administrator".
+enum DrillScenario {
+  SCHEDULED_QUARTERLY
+  PRIMARY_SERVER_LOSS
+  KEY_SERVICE_UNAVAILABLE
+  SOLE_ADMINISTRATOR_DEPARTED
+}
+
+model RestoreDrill {
+  id           String      @id @default(uuid())
+  restoreRunId String?
+  restoreRun   RestoreRun? @relation(fields: [restoreRunId], references: [id])
+
+  scenario          DrillScenario
+  performedAt       DateTime      @default(now())
+  performedByUserId String?
+
+  achievedRpoSeconds Int?
+  achievedRtoSeconds Int?
+
+  /// Structured, not prose: BCP06 asks for "missing items, exceptions and
+  /// remediation owner", and a drill must not be able to pass by being written
+  /// up well.
+  missingItems String[]
+  exceptions   String[]
+
+  remediationOwnerUserId String?
+  remediationOwnerName   String
+  remediationDueAt       DateTime?
+  remediationClosedAt    DateTime?
+
+  notes String?
+
+  /// Next drill due — quarterly by default (BCP06 "periodically thereafter,
+  /// proposed quarterly").
+  nextDueAt DateTime
+
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+
+  @@index([scenario, performedAt])
+}
+
+/// BCP04 lists what can fail independently of the core: "internet, email, AI
+/// or connector outages". Database, object store and queue are added because
+/// the same screen has to tell a user which local functions still work.
+enum MonitoredService {
+  DATABASE
+  OBJECT_STORE
+  QUEUE
+  INTERNET
+  EMAIL
+  AI
+  CONNECTOR
+}
+
+enum ServiceState {
+  OPERATIONAL
+  DEGRADED
+  OFFLINE
+  UNKNOWN
+}
+
+model ServiceStatusRecord {
+  id      String           @id @default(uuid())
+  service MonitoredService @unique
+
+  state ServiceState @default(UNKNOWN)
+
+  /// When the CURRENT state began — not when it was last polled. A user needs
+  /// "email has been down for three hours", not "checked one second ago".
+  since     DateTime @default(now())
+  checkedAt DateTime @default(now())
+  detail    String?
+
+  /// BCP04: "Keep work queues and local functions available where
+  /// infrastructure permits." What still works is part of the status, because
+  /// a red dot with no guidance just stops the office.
+  degradedGuidance String?
+
+  version Int @default(1)
+}
+
+/// BCP04: "a procedure for recording work performed during downtime when the
+/// core returns." Kept deliberately separate from Job and TimeEntry until a
+/// human reconciles it — an unreconciled downtime note must never silently
+/// become billable or completed work.
+model DowntimeWorkRecord {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  recordedByUserId String
+
+  /// When the work actually happened, which is not when it was typed in.
+  occurredAt DateTime
+  recordedAt DateTime @default(now())
+
+  service     MonitoredService?
+  description String
+
+  jobId        String?
+  obligationId String?
+
+  reconciledAt       DateTime?
+  reconciledByUserId String?
+  reconciliationNote String?
+
+  version Int @default(1)
+
+  @@index([practiceId, reconciledAt])
 }

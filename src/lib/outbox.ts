@@ -22,6 +22,7 @@
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { currentCorrelationId } from "@/lib/correlation";
+import { assertExternalSendingAllowed } from "@/lib/external-sending";
 
 /** Events this system commits. Names are stable — consumers match on them. */
 export type OutboxEventType =
@@ -140,6 +141,11 @@ export async function dispatchOutbox(params: {
   limit?: number;
   now?: Date;
 }): Promise<DispatchResult> {
+  // BCP03. Checked before a single event is claimed: a restored environment
+  // that dispatches even one historical event has already resent it, and
+  // "we only sent a few" is not a recovery control.
+  assertExternalSendingAllowed("Outbox dispatch");
+
   const now = params.now ?? new Date();
   const dispatcherId = params.dispatcherId ?? `dispatcher-${process.pid}`;
   const result: DispatchResult = {

@@ -632,12 +632,45 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
     the pin cannot go on before the screen exists).
   - [x] T17.8 — Run the acceptance test + full regression suite.
 
-- [ ] **T18 — Backup & recovery.** Implement BCP01-04, BCP06 (PRD §37):
+- [~] **T18 — Backup & recovery.** Implement BCP01-04, BCP06 (PRD §37):
   encrypted backups in a separate failure domain, RPO ≤1hr/RTO ≤8hr
   targets, restore reconciliation, quarterly restore drill.
   *Test: restore a synthetic production copy into an isolated environment
   with external sending disabled; verify a random sample of file hashes,
   permissions, and receipt balances.*
+  - [x] T18.1 — Schema + migration: BackupRun/BackupArtifact,
+    RestoreRun/RestoreCheck, RestoreDrill, ServiceStatusRecord,
+    DowntimeWorkRecord and their enums.
+  - [x] T18.2 — BCP01 backup engine (`src/lib/backup.ts`): database rows,
+    object versions + per-object SHA-256 manifest, configuration, templates,
+    key-material INVENTORY (never plaintext secrets), audit events with the
+    chain head. Every artifact AES-256-GCM encrypted under a backup key that
+    is separate from `APP_ENCRYPTION_KEY`, hashed, and written to a backup
+    root plus an immutable copy.
+  - [x] T18.3 — BCP02 targets: record data-as-of, measure RPO from backup
+    age and RTO from restore start to usable, compare against the declared
+    1h/8h targets and flag a breach. Never report a target as met unless it
+    was measured.
+  - [x] T18.4 — BCP03 restore engine (`src/lib/restore.ts`): restore into
+    an isolated database with external sending disabled and an outbound HOLD
+    in force; reconcile object manifest against database references and a
+    hash sample; reapply revoked access, legal holds and approved erasures;
+    quarantine restored pending outbound messages/outbox events so history
+    cannot resend. Hold release requires reconciliation to pass.
+  - [ ] T18.5 — BCP04 continuity (`src/lib/continuity.ts`): degraded status
+    for database, object store, queue, internet, email, AI and connectors;
+    controlled emergency obligation export (plain CSV, scoped and logged);
+    downtime work records captured offline and reconciled when core returns.
+  - [ ] T18.6 — BCP06 drills: runner for the three named scenarios (primary
+    server loss, key service unavailable, sole administrator departed) plus
+    quarterly cadence, recording achieved times, missing items, exceptions,
+    remediation owner and due date.
+  - [ ] T18.7 — API routes + continuity/backup screen, `system.administer`
+    gated, five UI states.
+  - [ ] T18.8 — `BACKUP-RECOVERY.md`: approved locations, administrators,
+    procedures, and an explicit list of what is NOT yet verified.
+  - [ ] T18.9 — `tests/t18-backup-recovery.ts` acceptance test.
+  - [ ] T18.10 — Run acceptance test + full regression suite.
 
 ---
 

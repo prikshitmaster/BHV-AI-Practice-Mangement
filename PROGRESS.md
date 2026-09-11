@@ -1750,3 +1750,51 @@ queue screens like My work) and no "Communication" section (message threads
 have no viewing screen anywhere yet, staff or portal — only the client
 request itself is visible, via "Open requests"). That gap is now recorded
 in the doc itself, not just here.
+
+- 2026-09-11 — T18.1 — Added BackupRun/BackupArtifact, RestoreRun/
+  RestoreCheck, RestoreDrill, ServiceStatusRecord, DowntimeWorkRecord and
+  their enums; migration 20260911055425_backup_recovery_continuity created
+  and applied against the live database, client regenerated. — not yet
+  tested (schema only; T18 acceptance test runs at T18.10).
+
+- 2026-09-11 — T18.2 — `src/lib/backup.ts`: AES-256-GCM archives under a
+  BACKUP_ENCRYPTION_KEY that the engine REFUSES to let equal
+  APP_ENCRYPTION_KEY; table list read from information_schema (not a
+  hand-kept array) and rows serialised by Postgres via to_jsonb so numerics,
+  timestamps, arrays and jsonb round-trip exactly; separate audit-event
+  artifact carrying the chain head; object manifest with per-version SHA-256
+  plus hash-verified payload copies; configuration with credentials stripped;
+  templates; key INVENTORY with fingerprints and no key material; plaintext
+  manifest.json; offsite copy + optional read-only pass. — tested by running
+  it against the live database: 104 tables / 12,456 rows / 3,380 audit events
+  / 9 object payloads archived, artifact read back and hash-verified, a
+  one-byte tamper refused, and 61 genuine gaps reported (old test-fixture
+  DocumentVersion rows whose objects were never in MinIO) rather than hidden
+  — PASS for the micro-step.
+
+- 2026-09-11 — T18.3 — BCP02 targets: RPO/RTO targets default to the PRD's
+  1h/8h and only move on an explicit env override; `recoveryPosture()` reports
+  current RPO exposure and the LAST MEASURED restore time, with null (not
+  zero, not "within target") for "no backup yet" and "never restored", plus a
+  warnings list for offsite/immutable gaps. — typecheck clean; exercised at
+  T18.10 with real runs.
+
+- 2026-09-11 — T18.4 — `src/lib/restore.ts` + `src/lib/external-sending.ts`.
+  Restore refuses to start unless the target differs from DATABASE_URL and
+  EXTERNAL_SENDING_DISABLED is set; manifest hash is verified before any read;
+  rows go back through Postgres' own jsonb_populate_record (so numerics,
+  timestamps, enums and jsonb round-trip exactly) with FK and SEC04 triggers
+  stood down so restored Event rows KEEP their original hashes; every queued
+  outbound message and outbox event is parked in a new
+  HELD_RESTORE_RECONCILIATION state (added to both enums, migration
+  20260911060242); post-backup revocations, legal holds and executed erasures
+  are re-applied from the live side, and a document resurrected by the archive
+  is erased again; `dispatchOutbox` now refuses outright when sending is
+  disabled. Hold release is a separate human act, version-checked, and refuses
+  on any failed or absent check. — tested by a real restore into an isolated
+  database: 12,456 rows / 104 tables restored, 48 messages + 14 outbox events
+  quarantined, 14/14 reconciliation checks PASS (object references both ways,
+  5-file random hash sample, receipt + allocation totals in paise, no
+  over-allocated receipt, 105 active obligations, audit chain head
+  sequence 3381 hash-identical, outbound hold verified), measured RPO 612s
+  against a 3600s target and RTO 20s against a 28800s target — PASS.

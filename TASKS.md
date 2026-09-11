@@ -632,7 +632,7 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
     the pin cannot go on before the screen exists).
   - [x] T17.8 — Run the acceptance test + full regression suite.
 
-- [~] **T18 — Backup & recovery.** Implement BCP01-04, BCP06 (PRD §37):
+- [x] **T18 — Backup & recovery.** Implement BCP01-04, BCP06 (PRD §37):
   encrypted backups in a separate failure domain, RPO ≤1hr/RTO ≤8hr
   targets, restore reconciliation, quarterly restore drill.
   *Test: restore a synthetic production copy into an isolated environment
@@ -657,20 +657,30 @@ Status legend: [ ] not started · [~] in progress · [x] done & tested
     hash sample; reapply revoked access, legal holds and approved erasures;
     quarantine restored pending outbound messages/outbox events so history
     cannot resend. Hold release requires reconciliation to pass.
-  - [ ] T18.5 — BCP04 continuity (`src/lib/continuity.ts`): degraded status
+  - [x] T18.5 — BCP04 continuity (`src/lib/continuity.ts`): degraded status
     for database, object store, queue, internet, email, AI and connectors;
     controlled emergency obligation export (plain CSV, scoped and logged);
     downtime work records captured offline and reconciled when core returns.
-  - [ ] T18.6 — BCP06 drills: runner for the three named scenarios (primary
+  - [x] T18.6 — BCP06 drills: runner for the three named scenarios (primary
     server loss, key service unavailable, sole administrator departed) plus
     quarterly cadence, recording achieved times, missing items, exceptions,
     remediation owner and due date.
-  - [ ] T18.7 — API routes + continuity/backup screen, `system.administer`
-    gated, five UI states.
-  - [ ] T18.8 — `BACKUP-RECOVERY.md`: approved locations, administrators,
-    procedures, and an explicit list of what is NOT yet verified.
-  - [ ] T18.9 — `tests/t18-backup-recovery.ts` acceptance test.
-  - [ ] T18.10 — Run acceptance test + full regression suite.
+  - [x] T18.7 — API routes + continuity/backup screen, `system.administer`
+    gated, five UI states. `/continuity` (status board for every member,
+    downtime sheet, emergency export, admin recovery panel), linked from
+    Practice; degraded-status banner on Home. `npm run continuity:walk` 29/29
+    over HTTP; `npm run dev:walk` now includes `/continuity`.
+  - [x] T18.8 — `BACKUP-RECOVERY.md`: approved locations, administrators,
+    procedures, and an explicit list of what is NOT yet verified. Plus
+    `npm run backup` / `npm run restore` CLI (for a scheduler, and for when the
+    web app is down).
+  - [x] T18.9 — `tests/t18-backup-recovery.ts` acceptance test. WRITTEN AND RUN
+    BEFORE T18.7 (the T13/T14 lesson). 96/96 — it found a real BCP03 gap in
+    restore.ts on its first run (see PROGRESS.md).
+  - [x] T18.10 — Run acceptance test + full regression suite. 1,003 assertions,
+    all green (two passes: T02-T07 + T16 with the dev server, the rest without).
+    Production gaps that do NOT block this task's test but DO block go-live are
+    listed in BACKUP-RECOVERY.md §7 (no backup scheduler above all).
 
 ---
 

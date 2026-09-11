@@ -194,6 +194,17 @@ export async function deleteObject(key: string): Promise<void> {
   }
 }
 
+/**
+ * BCP04 health probe: does the configured bucket answer a signed HEAD? Throws
+ * STORE_NOT_CONFIGURED like every other call, so an unconfigured store reads
+ * as a fault rather than as healthy.
+ */
+export async function bucketReachable(): Promise<boolean> {
+  const cfg = config();
+  const res = await signedFetch(cfg, { method: "HEAD", key: "", payloadHash: EMPTY_HASH });
+  return res.ok;
+}
+
 /** Creates the bucket if it is missing. Idempotent; used by dev bootstrap. */
 export async function ensureBucket(): Promise<void> {
   const cfg = config();

@@ -35,6 +35,7 @@ import { ReceiptError } from "@/lib/receipts";
 import { SeparationOfDutiesError } from "@/lib/separation-of-duties";
 import { VersionConflictError, SubjectNotFoundError } from "@/lib/concurrency";
 import { ApprovalError } from "@/lib/approvals";
+import { ContinuityError } from "@/lib/continuity";
 
 export type ApiErrorBody = {
   error: string;
@@ -122,6 +123,13 @@ export function errorResponse(e: unknown): NextResponse {
   // API02: an approval refused for its own reasons (no version stated, an
   // unapprovable subject) — same envelope, its own code.
   if (e instanceof ApprovalError) {
+    return fail(e.status, e.code, e.message);
+  }
+
+  // BCP04/BCP06 refusals (step-up required, probed service, downtime line N
+  // not found, remediation owner missing). Written for the person who has to
+  // act on them; a not-found keeps the 404 shape and names no record.
+  if (e instanceof ContinuityError) {
     return fail(e.status, e.code, e.message);
   }
 

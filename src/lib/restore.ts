@@ -32,11 +32,14 @@ import { recordEvent } from "@/lib/audit";
 import {
   RPO_TARGET_SECONDS,
   RTO_TARGET_SECONDS,
+  artifactPath,
   decryptArtifact,
   readArtifact,
+  type ArtifactSource,
 } from "@/lib/backup";
 import { sha256Hex } from "@/lib/object-store";
 import { externalSendingDisabled } from "@/lib/external-sending";
+import { assertSystemAdministrator } from "@/lib/continuity";
 import { promises as fs } from "node:fs";
 
 export class RestoreSafetyError extends Error {
@@ -58,6 +61,11 @@ export type RestoreOptions = {
   sampleSeed?: number;
   /** Skip `prisma migrate deploy` when the target schema is already current. */
   skipMigrate?: boolean;
+  /**
+   * Which copy to restore from. "offsite" is what a primary-server-loss drill
+   * (BCP06) must use — restoring from the primary proves nothing about losing it.
+   */
+  source?: ArtifactSource;
 };
 
 export type RestoreCheckResult = {
@@ -214,7 +222,14 @@ export async function runRestore(options: RestoreOptions): Promise<RestoreResult
 
   // The manifest is verified before anything is read from it, so a tampered or
   // truncated archive is caught here rather than halfway through a restore.
-  const manifestPath = `${backup.primaryLocation}/${backup.id}/manifest.json`;
+  const sourceRoot =
+    options.source === "offsite" ? backup.offsiteLocation : backup.primaryLocation;
+  if (!sourceRoot) {
+    throw new RestoreSafetyError(
+      `Backup ${backup.id} has no copy in a separate failure domain, so it cannot be restored from offsite.`,
+    );
+  }
+  const manifestPath = `${sourceRoot}/${backup.id}/manifest.json`;
   const manifestBytes = await fs.readFile(manifestPath);
   if (sha256Hex(manifestBytes) !== backup.manifestSha256) {
     throw new RestoreSafetyError(
@@ -247,10 +262,20 @@ export async function runRestore(options: RestoreOptions): Promise<RestoreResult
     target = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
 
     // ---- restore rows ---------------------------------------------------
-    const dbArtifact = await readArtifact(backup.id, "DATABASE_ROWS", "database-rows.ndjson");
+    const dbArtifact = await readArtifact(
+      backup.id,
+      "DATABASE_ROWS",
+      "database-rows.ndjson",
+      options.source,
+    );
     const lines = dbArtifact.body.toString("utf8").split("\n").filter(Boolean);
 
-    const tables = await targetTables(target);
+    // `_prisma_migrations` is the TARGET's record of the schema that
+    // applyMigrations just built — it is not client data. Loading the archive's
+    // copy over it desynchronises history from schema: the next migrate deploy
+    // then re-runs migrations whose effects are already present and fails
+    // (found by the first BCP06 primary-loss drill, P3018 on an enum label).
+    const tables = (await targetTables(target)).filter((t) => t !== "_prisma_migrations");
     const quoted = tables.map((t) => `"public".${JSON.stringify(t)}`);
 
     // Foreign keys and the SEC04 append-only triggers both live as triggers.
@@ -329,10 +354,13 @@ export async function runRestore(options: RestoreOptions): Promise<RestoreResult
     // ---- BCP03 re-apply post-backup decisions, then reconcile -------------
     const checks: RestoreCheckResult[] = [];
     checks.push(...(await reapplyAccessDecisions(target, backup.dataAsOf)));
-    checks.push(...(await reconcileObjects(target, backup.id, options.objectHashSampleSize ?? 10)));
+    const source = options.source ?? "primary";
+    checks.push(
+      ...(await reconcileObjects(target, backup.id, options.objectHashSampleSize ?? 10, source)),
+    );
     checks.push(...(await reconcileFinancials(target, dbArtifact.body.toString("utf8"))));
     checks.push(...(await reconcileObligations(target, dbArtifact.body.toString("utf8"))));
-    checks.push(...(await reconcileAuditChain(target, backup.id)));
+    checks.push(...(await reconcileAuditChain(target, backup.id, source)));
     checks.push(await reconcileOutboundHold(target));
 
     for (const c of checks) {
@@ -484,6 +512,96 @@ async function reapplyAccessDecisions(
       passed: true,
     });
 
+    // A membership revocation is not the whole of "revoked access". suspendUser
+    // also marks the ACCOUNT suspended and kills its sessions, links and queued
+    // exports — and an archive taken before that brings all of them back live:
+    // a restored session row is a working bearer token for someone who left.
+    // Found by the T18 acceptance test, which suspends a user after the backup.
+    const withdrawnUsers = await prisma.user.findMany({
+      where: { status: { in: ["SUSPENDED", "DEACTIVATED"] } },
+      select: { id: true, status: true, suspendedAt: true, suspendedReason: true },
+    });
+    let usersReapplied = 0;
+    for (const u of withdrawnUsers) {
+      const r = await target.user.updateMany({
+        where: { id: u.id, status: { in: ["ACTIVE", "INVITED"] } },
+        data: { status: u.status, suspendedAt: u.suspendedAt, suspendedReason: u.suspendedReason },
+      });
+      usersReapplied += r.count;
+    }
+    out.push({
+      category: "PERMISSION",
+      subject: "user accounts suspended or deactivated",
+      expected: `${withdrawnUsers.length} account(s) withdrawn in the restored copy`,
+      actual: `${usersReapplied} re-applied, ${withdrawnUsers.length - usersReapplied} already withdrawn`,
+      passed: true,
+    });
+
+    // Every other revocable credential or authority, by the one column they
+    // share. Raw SQL on both sides so adding a table here is one word.
+    const revocable = [
+      "Session",
+      "PortalSession",
+      "DocumentAccessToken",
+      "MfaEnrolment",
+      "Invitation",
+      "PortalInvitation",
+      "ContactAuthority",
+      "CrossPracticeShare",
+      "DocumentReleaseGrant",
+      "DocumentRelease",
+    ];
+    const perTable: string[] = [];
+    let credentialRevocations = 0;
+    let credentialsReapplied = 0;
+    for (const table of revocable) {
+      const rows = await prisma.$queryRawUnsafe<{ id: string; revokedAt: Date }[]>(
+        `SELECT id, "revokedAt" FROM "public".${JSON.stringify(table)} WHERE "revokedAt" > $1`,
+        dataAsOf,
+      );
+      let applied = 0;
+      for (const r of rows) {
+        applied += await target.$executeRawUnsafe(
+          `UPDATE "public".${JSON.stringify(table)} SET "revokedAt" = $1 WHERE id = $2 AND "revokedAt" IS NULL`,
+          r.revokedAt,
+          r.id,
+        );
+      }
+      credentialRevocations += rows.length;
+      credentialsReapplied += applied;
+      if (rows.length > 0) perTable.push(`${table}: ${applied}/${rows.length}`);
+    }
+    out.push({
+      category: "PERMISSION",
+      subject: "sessions, links, enrolments, invitations and authorities revoked after the backup",
+      expected: `${credentialRevocations} revocation(s) present in the restored copy`,
+      actual: `${credentialsReapplied} re-applied, ${credentialRevocations - credentialsReapplied} already revoked`,
+      passed: true,
+      detail: perTable.length ? perTable.join("; ") : undefined,
+    });
+
+    // A queued export cancelled on live (IAM05: "revocation invalidates ...
+    // queued exports") must not come back QUEUED and run from the restored copy.
+    const cancelledJobs = await prisma.queuedJob.findMany({
+      where: { state: "CANCELLED", finishedAt: { gt: dataAsOf } },
+      select: { id: true, cancelledReason: true, finishedAt: true },
+    });
+    let jobsReapplied = 0;
+    for (const j of cancelledJobs) {
+      const r = await target.queuedJob.updateMany({
+        where: { id: j.id, state: { in: ["QUEUED", "RUNNING"] } },
+        data: { state: "CANCELLED", cancelledReason: j.cancelledReason, finishedAt: j.finishedAt },
+      });
+      jobsReapplied += r.count;
+    }
+    out.push({
+      category: "PERMISSION",
+      subject: "queued jobs cancelled after the backup",
+      expected: `${cancelledJobs.length} cancellation(s) present in the restored copy`,
+      actual: `${jobsReapplied} re-applied, ${cancelledJobs.length - jobsReapplied} already cancelled`,
+      passed: true,
+    });
+
     const holds = await prisma.legalHold.findMany({
       where: { placedAt: { gt: dataAsOf }, releasedAt: null },
     });
@@ -546,7 +664,9 @@ async function reapplyAccessDecisions(
       category: "PERMISSION",
       subject: "post-backup access decisions",
       expected: "revocations, holds and erasures re-applied",
-      actual: `could not be read: ${e instanceof Error ? e.message : String(e)}`,
+      // Driver-adapter errors can carry an EMPTY message with the cause in
+      // `code`/`meta`; an operator reading this at 2am needs all of it.
+      actual: `could not be applied: ${describeError(e)}`,
       passed: false,
       detail:
         "Failing rather than passing is deliberate. An unverified re-application is an " +
@@ -569,13 +689,14 @@ async function reconcileObjects(
   target: PrismaClient,
   backupRunId: string,
   sampleSize: number,
+  source: ArtifactSource,
 ): Promise<RestoreCheckResult[]> {
   const out: RestoreCheckResult[] = [];
 
   const manifest = JSON.parse(
-    (await readArtifact(backupRunId, "OBJECT_MANIFEST", "object-manifest.json")).body.toString(
-      "utf8",
-    ),
+    (
+      await readArtifact(backupRunId, "OBJECT_MANIFEST", "object-manifest.json", source)
+    ).body.toString("utf8"),
   ) as {
     entries: {
       versionId: string;
@@ -623,12 +744,13 @@ async function reconcileObjects(
     try {
       const artifact = await prisma.backupArtifact.findFirst({
         where: { backupRunId, kind: "OBJECT_PAYLOAD", name: `objects/${entry.sha256}` },
+        include: { backupRun: { select: { primaryLocation: true, offsiteLocation: true } } },
       });
       if (!artifact) {
         mismatches.push(`${entry.versionId}: payload artifact absent`);
         continue;
       }
-      const body = decryptArtifact(await fs.readFile(artifact.storedAt));
+      const body = decryptArtifact(await fs.readFile(artifactPath(artifact, source)));
       const row = restored.find((v) => v.id === entry.versionId);
       if (sha256Hex(body) === entry.sha256 && row?.sha256 === entry.sha256) matched += 1;
       else mismatches.push(`${entry.versionId}: hash mismatch`);
@@ -741,8 +863,9 @@ async function reconcileObligations(
 async function reconcileAuditChain(
   target: PrismaClient,
   backupRunId: string,
+  source: ArtifactSource,
 ): Promise<RestoreCheckResult[]> {
-  const artifact = await readArtifact(backupRunId, "AUDIT_EVENTS", "audit-events.ndjson");
+  const artifact = await readArtifact(backupRunId, "AUDIT_EVENTS", "audit-events.ndjson", source);
   const [headerLine] = artifact.body.toString("utf8").split("\n");
   const header = JSON.parse(headerLine) as {
     chainHead: { sequence: string; hash: string | null } | null;
@@ -820,6 +943,10 @@ export async function releaseOutboundHold(params: {
   reason: string;
   expectedVersion: number;
 }): Promise<{ releasedAt: Date; version: number }> {
+  // In the library, not only the route: whoever can call this can let a
+  // restored copy start sending, which is an administration act (IAM02).
+  await assertSystemAdministrator(params.releasedByUserId);
+
   const run = await prisma.restoreRun.findUnique({
     where: { id: params.restoreRunId },
     include: { checks: true },
@@ -872,6 +999,16 @@ export async function releaseOutboundHold(params: {
 }
 
 // ------------------------------------------------------------------ helpers
+
+function describeError(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  const extra = e as Error & { code?: unknown; meta?: unknown; cause?: unknown };
+  const parts = [e.name, e.message || "(no message)"];
+  if (extra.code) parts.push(`code=${String(extra.code)}`);
+  if (extra.meta) parts.push(`meta=${JSON.stringify(extra.meta).slice(0, 300)}`);
+  if (extra.cause) parts.push(`cause=${extra.cause instanceof Error ? extra.cause.message : String(extra.cause)}`);
+  return parts.join(" | ");
+}
 
 function rowsFromNdjson(ndjson: string, table: string): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];

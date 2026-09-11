@@ -4,6 +4,7 @@ import { loadUxContext } from "@/lib/ux";
 import { prisma } from "@/lib/prisma";
 import { can } from "@/lib/permissions";
 import { EmptyState, PermissionState, Screen } from "@/components/states";
+import { serviceStatusBoard } from "@/lib/continuity";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +84,13 @@ export default async function HomePage() {
 
   const next = myJobs[0];
 
+  // BCP04: a degraded service is surfaced where people start their day, not
+  // only on the continuity screen. Only states KNOWN to be bad are flagged —
+  // an unreported service is not an outage.
+  const degraded = (await serviceStatusBoard().catch(() => [])).filter(
+    (s) => s.effectiveState === "OFFLINE" || s.effectiveState === "DEGRADED",
+  );
+
   return (
     <Screen
       title={`Welcome, ${ctx.userName}`}
@@ -95,6 +103,17 @@ export default async function HomePage() {
         ) : null
       }
     >
+      {degraded.length ? (
+        <div className="banner banner--warning" role="status">
+          <p>
+            <strong>
+              {degraded.map((s) => `${s.service.replace("_", " ").toLowerCase()} ${s.effectiveState.toLowerCase()}`).join(", ")}
+              .
+            </strong>{" "}
+            <Link href="/continuity">See what still works</Link>
+          </p>
+        </div>
+      ) : null}
       {!readsJobs ? (
         <PermissionState />
       ) : (

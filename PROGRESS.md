@@ -1658,6 +1658,11 @@ been started at all.
   durably and correctly, but they accumulate as PENDING until a worker or cron
   calls the dispatcher — so no side effect actually fires yet. Needs wiring
   into the T12 BullMQ worker, or a cron, before deployment.
+- Nothing schedules `npm run backup` (T18/BCP02). The 1 h RPO target is unmet
+  until a cron / Task Scheduler job runs it at least hourly. No production
+  offsite or immutable backup location is approved (depends on PRD §46).
+  Two system administrators and two key custodians must be named at
+  onboarding, or the BCP06 drill gate stays blocked — see BACKUP-RECOVERY.md.
 - Real BHV identifiers, bank accounts and signatories still to be
   confirmed at onboarding; everything built so far uses fictional data
   only.
@@ -1798,3 +1803,172 @@ in the doc itself, not just here.
   over-allocated receipt, 105 active obligations, audit chain head
   sequence 3381 hash-identical, outbound hold verified), measured RPO 612s
   against a 3600s target and RTO 20s against a 28800s target — PASS.
+
+- 2026-09-11 — T18.5 — `src/lib/continuity.ts` (+ `bucketReachable()` in
+  object-store.ts). Database, object store and queue are MEASURED by a probe
+  (SELECT 1, signed bucket HEAD, a raw Redis PING over a socket — no new
+  dependency); internet/email/AI/connector have no live integration in R0, so
+  they are REPORTED by a system administrator, and a person is refused when
+  trying to set a probed service. `since` moves only on a real state change;
+  a status older than 15 min shows as UNKNOWN, never as its last good value;
+  per-function availability (work queues, documents, reminders, portal, …) is
+  worst-dependency-wins and UNCERTAIN unless every dependency is freshly
+  measured. Emergency obligation export: one practice, export.run + a fresh
+  AUTH02 EXPORT step-up on the actor's OWN live session + a reason, narrowed to
+  assignment scope, open obligations only with all six DUE02 dates in labelled
+  columns, formula-injection-safe CSV, audited with row count + SHA-256 and
+  never the contents. Downtime sheet: all-or-nothing batch entry with
+  occurredAt ≠ recordedAt, cross-practice job/obligation links refused as
+  not-found, reconciliation is a version-checked human note that creates NO
+  time entry and moves NO job. — smoke-tested live: all three probes
+  OPERATIONAL against the running containers, Redis pointed at a dead port
+  reads OFFLINE and blocks "Reminders" while "Client portal" reads UNCERTAIN;
+  restoring it moves `since`. Export/downtime paths are exercised by the T18.9
+  acceptance test (they need actor fixtures).
+
+- 2026-09-11 — T18.6 — `src/lib/drills.ts` (BCP06). A drill RUNS checks and
+  writes its own missingItems/exceptions; a person adds owner, due date and
+  notes but cannot remove a finding. PRIMARY_SERVER_LOSS decrypts + hash-checks
+  EVERY artifact in the offsite copy, then restores FROM THE OFFSITE COPY
+  (new `source: "offsite"` option on runRestore/readArtifact — restoring from
+  the primary proves nothing about losing it). KEY_SERVICE_UNAVAILABLE: held
+  key opens the newest backup, a WRONG key is refused (no partial decrypt),
+  archived secrets' APP key matches the one in use, backups under unheld keys
+  counted, escrow retrieval taken as an ATTESTATION but checked against the
+  real key fingerprint. SOLE_ADMINISTRATOR_DEPARTED: remaining admins,
+  remaining access grantors, custodians other than the departing person, DSC
+  tokens in their custody — scoped to the performer's tenant. Quarterly
+  nextDueAt; `productionDrillGate()` passes only if each scenario's LATEST
+  drill is clean or closed AND the latest primary-loss restore reconciled and
+  met both targets (closing a note cannot fake a working restore).
+  — run live against the real archive: primary-loss restored 12,520 rows from
+  the offsite copy, 14/14 artifacts + 14/14 reconciliation checks, RPO 3 s /
+  RTO 13 s; key drill clean; sole-admin drill correctly MISSING "no other
+  person holds system administration" (dev data has one IT admin) — PASS.
+- 2026-09-11 — REAL RESTORE BUG FOUND BY THE FIRST DRILL: `runRestore` loaded
+  the archive's `_prisma_migrations` rows over the target's, so the target's
+  migration history stopped matching the schema `migrate deploy` had just
+  built. The next restore re-ran 20260911060242 against enum labels that
+  already existed → P3018, restore aborted. Fixed by excluding
+  `_prisma_migrations` from truncate/load (the target's history is
+  authoritative for the target). The disposable drill DB was repaired with
+  `migrate resolve --applied` (non-destructive). The migration itself was NOT
+  edited — changing an applied migration's checksum would make `migrate dev`
+  demand a reset of the live dev database.
+
+- 2026-09-11 — T18.9 — `tests/t18-backup-recovery.ts` (`npm run test:t18`,
+  added to `npm test`), written and run BEFORE the routes (T18.7). Library
+  level, needs db + minio + redis, no HTTP. Builds a fictional practice
+  through the REAL libraries (issued invoice, part payment + TDS, a client
+  original and an APPROVED deliverable filed into MinIO), backs up to a temp
+  primary + offsite root, CHANGES live afterwards (suspends a user who had a
+  live session and a queued export, places a legal hold), then restores from
+  the OFFSITE copy into the isolated drill DB and reads it directly.
+  — 96/96. PRD evidence: restore refused with sending enabled (and before any
+  RestoreRun row is written); original + signed file hashes agree across
+  restored row, offsite bytes and live; post-backup suspension, session
+  revocation, membership revocation, export cancellation and legal hold all
+  survive the restore; active obligations and receipt balances (paise, PAYMENT
+  and TDS distinct) match; the pending INVOICE_ISSUED outbox event is HELD in
+  the restored copy; measured RPO/RTO recorded against 1 h / 8 h and reported
+  by recoveryPosture. Plus BCP04 status/export/downtime and BCP06 drills, each
+  with a control (tampered offsite byte, wrong escrow fingerprint, second
+  admin clears the sole-admin finding, other tenants' admins do not count).
+- 2026-09-11 — REAL BCP03 GAP FOUND BY THAT TEST (the important one): the
+  restore re-applied membership and grant revocations but NOT the rest of what
+  suspendUser does. A backup taken before someone was suspended restored their
+  account ACTIVE, their session row UN-REVOKED (a working bearer token for a
+  leaver) and their export QUEUED. Predicted by reading the code, written as
+  failing assertions first (3 failed, 93 passed), then fixed in
+  reapplyAccessDecisions: withdrawn accounts (SUSPENDED/DEACTIVATED) re-applied;
+  `revokedAt` re-applied across Session, PortalSession, DocumentAccessToken,
+  MfaEnrolment, Invitation, PortalInvitation, ContactAuthority,
+  CrossPracticeShare, DocumentReleaseGrant, DocumentRelease; exports cancelled
+  after the backup re-cancelled. Now 96/96, twice consecutively.
+  ONE UNEXPLAINED RUN between those: the re-application threw with an EMPTY
+  error message, the check failed and the outbound hold correctly stayed on;
+  the next two runs passed with no logic change. Most likely a transient
+  connection drop (the memory-pressure class already logged here). The catch
+  now reports the driver error's name/code/meta instead of a blank, so a
+  recurrence will say what it was.
+
+- 2026-09-11 — T18.7 (routes, part 1 of 2) — ten routes, each with an auth
+  gate and assertCsrf on every POST (the T15 route contract):
+  `POST /api/auth/step-up` (AUTH02 over HTTP for the first time — it was
+  library-only; bound to the caller's OWN DB session, so the dev header cannot
+  step up), `GET|POST /api/continuity/status` (board for any member; probe and
+  manual report for system admins), `POST /api/continuity/emergency-export`
+  (CSV, POST not GET so a prefetch cannot trigger it), `GET|POST
+  /api/continuity/downtime`, `POST /api/continuity/downtime/[id]/reconcile`
+  (practice read from the STORED record), and admin-only `GET /api/recovery`,
+  `POST /api/recovery/backups`, `POST /api/recovery/drills`,
+  `POST /api/recovery/drills/[id]/close`,
+  `POST /api/recovery/restores/[id]/release`. Recovery errors mapped in
+  src/lib/recovery-api.ts (kept out of the shared errorResponse so every route
+  does not bundle the restore engine); ContinuityError added to errorResponse.
+  Two hardening changes made on the way: `requireStepUp` is now RATE LIMITED
+  (5 per 15 min per user — exposing it over HTTP without a limit would have
+  made the 6-digit code guessable), and `releaseOutboundHold` checks system
+  administration IN THE LIBRARY, not only in the route. — typecheck clean;
+  screen + route exercise still to do.
+- 2026-09-11 — T18.7 (screen, part 2 of 2) — `/continuity` + loading.tsx,
+  `src/components/continuity-actions.tsx`. The status board is shown to EVERY
+  member (an outage only IT can see is one the office discovers by failing);
+  states are words as well as colour, stale ones read "unknown". Downtime
+  sheet + per-line reconcile (job.write), emergency export (export.run; step-up
+  code → export → save link with the SHA-256 shown), and the recovery panel for
+  system administrators only: measured RPO/RTO with warnings, backups (offsite/
+  immutable gaps named), restores with "Release outbound hold" only on a fully
+  reconciled one, drill schedule, the pre-production gate with its blockers,
+  open remediations, run-a-drill form. Sections load independently so a failed
+  drill query cannot blank the status board. NAV01's default menu is a fixed
+  list, so /continuity is NOT added to it — it is linked from Practice, and
+  Home shows a banner naming any service KNOWN to be offline/degraded.
+  `isSystemAdministrator` (non-auditing, for rendering) split from the
+  enforcing `assertSystemAdministrator`, so page views are not logged as
+  permission denials.
+  — tested over real HTTP: new `npm run continuity:walk`, 29/29 (role-gated
+  sections by the section's own heading id, CSRF refusal, probe/report gating,
+  SERVICE_IS_PROBED 409, step-up and export refuse the session-less dev
+  header, downtime 400/404/409/200, admin-only recovery API and hold release
+  403 from the library); real-session step-up checked by hand: export refused
+  before step-up (403 STEP_UP_REQUIRED), wrong code 401, right code 200, then a
+  200 text/csv with the labelled header; `npm run dev:walk` — every linked
+  destination 200, including /continuity. One assertion of my own was wrong on
+  the first run ("Emergency obligation export" is also a row in the
+  availability table every member sees) and was tightened to the section id —
+  the same passing/failing-for-the-wrong-reason class logged at T08/T12/T16.
+
+- 2026-09-11 — T18.8 — `BACKUP-RECOVERY.md`: artifact table, approved
+  locations (NONE approved for production — follows the open PRD §46 hosting
+  decision; dev values listed and labelled as not a separate failure domain),
+  administrator/custodian ROLES (names recorded at onboarding, not in the
+  repo), key escrow by fingerprint, procedures for backup, restore, the
+  offline revocation ledger the restore code already pointed to, outage
+  handling, drills and the pre-production gate, measured dev RPO/RTO, and 13
+  explicit NOT-yet-verified items (above all: nothing schedules backups, so the
+  1 h RPO is unmet until something runs `npm run backup` hourly). Added
+  `scripts/backup.ts` + `scripts/restore.ts` (`npm run backup`, `npm run
+  restore -- <id|latest> [--offsite]`); the restore CLI deliberately does NOT
+  set EXTERNAL_SENDING_DISABLED and does NOT release the hold. Removed the
+  previous session's untracked `scripts/_scratch-backup.ts` (it released the
+  hold as a zero-UUID user, which the new library check now refuses).
+  — run live: `npm run backup` completed with offsite copy and printed its
+  gaps; `npm run restore -- latest --offsite` refused without the flag
+  (exit 1), then with it restored 13,364 rows from the offsite copy, all
+  checks PASS, RPO 51 s / RTO 13 s, hold still on (exit 0).
+
+- 2026-09-11 — T18 — COMPLETE. Backup & recovery (BCP01-04, BCP06; BCP05 is
+  R1). — tested against the PRD §37 acceptance evidence via `npm run test:t18`
+  (96/96): a synthetic copy restored from the OFFSITE copy into the isolated
+  drill database with external sending disabled (and refused when it was not);
+  original and signed file hashes, post-backup permission decisions, active
+  obligations and receipt balances verified in the restored copy; measured
+  RPO/RTO recorded rather than a backup job's success — PASS.
+  Full regression: T02 13, T03 23, T04 37, T05 54, T06 44, T07 55, T16 91
+  (with dev server); T08 55, T09 60, T10 56, T11 110, T12 106, T13 61, T14 46,
+  T15 50, T17 46, T18 96 (without) = 1,003 assertions, all green.
+  GO-LIVE BLOCKERS carried into "Still open" below: nothing schedules backups
+  (RPO target unmet until something runs `npm run backup` hourly); no approved
+  offsite / immutable location (follows PRD §46); key escrow and the offline
+  revocation ledger are procedures on paper, unrehearsed.

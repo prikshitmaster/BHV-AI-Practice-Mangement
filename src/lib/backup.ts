@@ -642,15 +642,22 @@ export async function readArtifact(
   backupRunId: string,
   kind: BackupArtifactKind,
   name: string,
+  /**
+   * BCP06 "loss of the primary server": a drill must read the separate-failure-
+   * domain copy, or it has only proved the primary still works.
+   */
+  source: ArtifactSource = "primary",
+  key?: Buffer,
 ): Promise<LoadedArtifact> {
   const artifact = await prisma.backupArtifact.findFirst({
     where: { backupRunId, kind, name },
+    include: { backupRun: { select: { primaryLocation: true, offsiteLocation: true } } },
   });
   if (!artifact) {
     throw new BackupConfigurationError(`Backup ${backupRunId} has no ${kind} artifact "${name}".`);
   }
-  const blob = await fs.readFile(artifact.storedAt);
-  const body = decryptArtifact(blob);
+  const blob = await fs.readFile(artifactPath(artifact, source));
+  const body = decryptArtifact(blob, key);
   const actual = sha256Hex(body);
   if (actual !== artifact.sha256) {
     throw new BackupConfigurationError(
@@ -658,6 +665,34 @@ export async function readArtifact(
     );
   }
   return { name, kind, body };
+}
+
+export type ArtifactSource = "primary" | "offsite";
+
+/**
+ * Where an artifact's bytes live in the chosen copy. The offsite copy is the
+ * primary run directory copied whole (see runBackup), so the relative layout
+ * under `<root>/<runId>/` is identical in both.
+ */
+export function artifactPath(
+  artifact: {
+    backupRunId: string;
+    storedAt: string;
+    backupRun: { primaryLocation: string; offsiteLocation: string | null };
+  },
+  source: ArtifactSource,
+): string {
+  if (source === "primary") return artifact.storedAt;
+  if (!artifact.backupRun.offsiteLocation) {
+    throw new BackupConfigurationError(
+      "This backup has no copy in a separate failure domain — there is nothing offsite to read.",
+    );
+  }
+  const relative = path.relative(
+    path.join(artifact.backupRun.primaryLocation, artifact.backupRunId),
+    artifact.storedAt,
+  );
+  return path.join(artifact.backupRun.offsiteLocation, artifact.backupRunId, relative);
 }
 
 /** Seconds of data at risk if we had to fall back to this backup right now. */

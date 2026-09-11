@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { screenContext } from "@/lib/screen-context";
 import { EmptyState, Screen } from "@/components/states";
@@ -159,6 +160,15 @@ export default async function PracticePage() {
           top bar to change the theme; switching it keeps whatever you are working on.
         </p>
         <DensitySwitcher initial={ctx.density} />
+      </div>
+
+      <h2>Continuity</h2>
+      <div className="card">
+        <p style={{ marginTop: 0 }}>
+          Which services are working, what you can still do during an outage, the emergency
+          obligation export, and the sheet for recording work done while the system was down.
+        </p>
+        <Link href="/continuity">Service status and continuity</Link>
       </div>
 
       <h2>Guides</h2>

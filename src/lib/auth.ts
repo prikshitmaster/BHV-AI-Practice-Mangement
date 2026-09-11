@@ -35,6 +35,10 @@ const STEP_UP_TTL_MS = 5 * 60_000;
 // AUTH03 rate limits.
 const LOGIN_LIMIT = { max: 5, windowMs: 15 * 60_000 };
 const INVITE_LIMIT = { max: 20, windowMs: 60 * 60_000 };
+// AUTH01/AUTH02: a step-up is a second login for the most sensitive acts. It
+// had no limit until T18 exposed it over HTTP — a 6-digit code with unlimited
+// guesses is not a second factor.
+const STEP_UP_LIMIT = { max: 5, windowMs: 15 * 60_000 };
 const ACCOUNT_LOCK_MS = 15 * 60_000;
 
 export class AuthError extends Error {
@@ -384,6 +388,8 @@ export async function requireStepUp(
     select: { id: true, userId: true, revokedAt: true },
   });
   if (session.revokedAt) throw new AuthError("Session revoked.", "SESSION_REVOKED");
+
+  await consumeRateLimit(`stepup:${session.userId}`, STEP_UP_LIMIT);
 
   const enrolment = await prisma.mfaEnrolment.findFirst({
     where: { userId: session.userId, confirmedAt: { not: null }, revokedAt: null },

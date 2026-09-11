@@ -181,6 +181,15 @@ export default async function PracticePage() {
         <Link href="/privacy">Privacy and incidents</Link>
       </div>
 
+      <h2>Connectors</h2>
+      <div className="card">
+        <p style={{ marginTop: 0 }}>
+          Outside services this practice connects to — email, imports, storage — with their owner,
+          purpose, environment and credential reference. Secrets are never shown or stored here.
+        </p>
+        <Link href="/connectors">Connectors</Link>
+      </div>
+
       <h2>Guides</h2>
       <EmptyState
         title="Playbooks and the practice manual are not built yet"

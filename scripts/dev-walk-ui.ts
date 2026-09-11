@@ -159,6 +159,7 @@ async function main() {
     ["/team", "Team"],
     ["/continuity", "Continuity"],
     ["/privacy", "Privacy and incidents"],
+    ["/connectors", "Connectors"],
     [clientRel ? `/clients/${clientRel.id}` : "", "Client workspace"],
     [job ? `/jobs/${job.id}` : "", "Job detail"],
     [document ? `/documents/${document.id}` : "", "Document detail"],
@@ -208,6 +209,22 @@ async function main() {
       `\nProtected working paper (DOC03 needs its own grant): ${
         refused ? "refused, and the record is not named" : "REACHABLE — check the grant"
       }`,
+    );
+  }
+
+  // INT01 (T20): "Connectors" is also the h1 of the permission and error
+  // states, so the heading above cannot tell a working screen from a refusal.
+  // Check for content only the working screen renders.
+  {
+    const html = await (await get("/connectors")).text();
+    const working =
+      html.includes("Configured connectors") &&
+      html.includes("Add a connector") &&
+      !html.includes("could not be loaded") &&
+      !html.includes("You do not have access to this");
+    if (!working) broken++;
+    console.log(
+      `\nConnectors screen (INT01): ${working ? "list and create form rendered" : "NOT WORKING — permission or error state rendered"}`,
     );
   }
 

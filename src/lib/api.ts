@@ -37,6 +37,7 @@ import { VersionConflictError, SubjectNotFoundError } from "@/lib/concurrency";
 import { ApprovalError } from "@/lib/approvals";
 import { ContinuityError } from "@/lib/continuity";
 import { PrivacyError } from "@/lib/privacy-register";
+import { ConnectorError } from "@/lib/connectors";
 
 export type ApiErrorBody = {
   error: string;
@@ -138,6 +139,13 @@ export function errorResponse(e: unknown): NextResponse {
   // an item must be retained, awareness only moves earlier). Each names the
   // rule so the person can act on it; a not-found keeps the 404 shape.
   if (e instanceof PrivacyError) {
+    return fail(e.status, e.code, e.message);
+  }
+
+  // INT01 refusals (reference format, reference in use, test required). The
+  // messages never carry a secret — only references, which are not secret —
+  // and "in use" deliberately does not name the other practice.
+  if (e instanceof ConnectorError) {
     return fail(e.status, e.code, e.message);
   }
 

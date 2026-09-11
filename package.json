@@ -27,7 +27,7 @@
     "test:t12": "tsx tests/t12-communication.ts",
     "test:t13": "tsx tests/t13-portal.ts",
     "test:t16": "tsx tests/t16-ux.ts",
-    "test": "npm run test:t02 && npm run test:t03 && npm run test:t04 && npm run test:t05 && npm run test:t06 && npm run test:t07 && npm run test:t08 && npm run test:t09 && npm run test:t10 && npm run test:t11 && npm run test:t12 && npm run test:t13 && npm run test:t14 && npm run test:t15 && npm run test:t17 && npm run test:t18 && npm run test:t19",
+    "test": "npm run test:t02 && npm run test:t03 && npm run test:t04 && npm run test:t05 && npm run test:t06 && npm run test:t07 && npm run test:t08 && npm run test:t09 && npm run test:t10 && npm run test:t11 && npm run test:t12 && npm run test:t13 && npm run test:t14 && npm run test:t15 && npm run test:t17 && npm run test:t18 && npm run test:t19 && npm run test:t20",
     "portal:walk": "tsx scripts/portal-walk.ts",
     "test:t14": "tsx tests/t14-billing.ts",
     "test:t15": "tsx tests/t15-api.ts",
@@ -37,7 +37,8 @@
     "backup": "tsx scripts/backup.ts",
     "restore": "tsx scripts/restore.ts",
     "test:t19": "tsx tests/t19-privacy.ts",
-    "privacy:walk": "tsx scripts/privacy-walk.ts"
+    "privacy:walk": "tsx scripts/privacy-walk.ts",
+    "test:t20": "tsx tests/t20-connectors.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.0",

@@ -725,12 +725,29 @@ count them as R0, so R0's exit gate cannot pass without them.
   - [x] T19.8 — Run acceptance test + full regression suite. 1,097 assertions
     green in two passes, plus privacy:walk 21/21 and dev:walk (/privacy 200).
 
-- [ ] **T20 — Connector configuration.** Implement INT01 (PRD §31). INT02 is
+- [x] **T20 — Connector configuration.** Implement INT01 (PRD §31). INT02 is
   R1.
   *Test: connector config stores practice, owner, purpose, environment,
   scope, provider, credential REFERENCE and status; a connection test
   discloses no secret; dev and production credentials are separate;
   rotating one practice's token does not disrupt the other practice.*
+  - [x] T20.1 — Schema + migration: ConnectorConfig (credentialRef unique,
+    never a secret), ConnectorCredentialRotation, ConnectorTestRun; enums;
+    `connector.manage` permission (owner, partner, IT admin).
+  - [x] T20.2 — `src/lib/connectors.ts`: create/update (version-checked),
+    reference-format guard (env:/vault: only, platform secrets refused),
+    runtime-environment guard, test via probe seam with output scrubbed of
+    the secret, rotation (new ref, history, reuse refused), activation needs
+    a passing test on the current credential.
+  - [x] T20.3 — `tests/t20-connectors.ts` acceptance test, run BEFORE routes.
+    48/48.
+  - [x] T20.4 — API routes + `/connectors` screen (five states), Practice link,
+    dev:walk entry (with a BODY check — the h1 alone cannot tell the working
+    screen from its permission/error state).
+  - [x] T20.5 — Run acceptance test + regression. T20 48/48, T04 37/37 (the
+    permission matrix changed), T19 94/94, dev:walk all green. The rest of the
+    suite was NOT re-run (owner allowed skipping low-risk tests for the
+    delivery deadline) — re-run it in full at T25.
 
 - [ ] **T21 — Controlled import.** Implement MIG01-03 (PRD §43) and the R0
   Excel/CSV row of the PRD §31 integration table.

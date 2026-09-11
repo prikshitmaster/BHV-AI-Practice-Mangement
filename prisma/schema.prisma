@@ -205,6 +205,7 @@ model Practice {
   regulatoryRequirements RegulatoryRequirement[]
   securityIncidents      SecurityIncident[]
   erasureRequests        ErasureRequest[]
+  connectors             ConnectorConfig[]
 
   // IAM04: invoices above this value require independent review.
   invoiceApprovalThreshold Decimal @default(0) @db.Decimal(18, 2)
@@ -4371,4 +4372,105 @@ model ErasureItem {
   deletionRequestId String?
 
   @@unique([requestId, kind, targetId])
+}
+
+// ============================================================ INT01 (T20)
+
+/// INT01: "Development and production credentials are separate." The
+/// environment is part of the connector's identity, and the runtime refuses
+/// to use a connector whose environment is not its own.
+enum ConnectorEnvironment {
+  DEVELOPMENT
+  TEST
+  PRODUCTION
+}
+
+enum ConnectorStatus {
+  DRAFT
+  ACTIVE
+  DISABLED
+  RETIRED
+}
+
+enum ConnectorTestResult {
+  PASSED
+  FAILED
+  // The test was not attempted — wrong runtime environment, or the
+  // credential reference does not resolve. No secret was read.
+  REFUSED
+}
+
+/// INT01: "Store practice, owner, purpose, environment, scope, provider,
+/// credential reference and status." The credential itself is NEVER stored
+/// here — only a reference (`env:NAME` or `vault:path`) to where it lives.
+model ConnectorConfig {
+  id         String   @id @default(uuid())
+  practiceId String
+  practice   Practice @relation(fields: [practiceId], references: [id])
+
+  name        String
+  provider    String
+  purpose     String
+  ownerUserId String
+  environment ConnectorEnvironment
+  scope       String[]
+
+  // Unique across ALL practices and environments: two practices can never
+  // share a token, so rotating one cannot disrupt the other, and a dev
+  // connector can never point at the production secret.
+  credentialRef       String    @unique
+  credentialVersion   Int       @default(1)
+  credentialRotatedAt DateTime?
+
+  status ConnectorStatus @default(DRAFT)
+
+  lastTestedAt             DateTime?
+  lastTestResult           ConnectorTestResult?
+  lastTestMessage          String?
+  lastTestCredentialVersion Int?
+
+  createdByUserId String
+  version         Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  rotations ConnectorCredentialRotation[]
+  testRuns  ConnectorTestRun[]
+
+  @@unique([practiceId, name, environment])
+  @@unique([id, practiceId])
+}
+
+/// Rotation history. A retired reference can never be reused by any connector.
+model ConnectorCredentialRotation {
+  id          String          @id @default(uuid())
+  connectorId String
+  practiceId  String
+  connector   ConnectorConfig @relation(fields: [connectorId, practiceId], references: [id, practiceId])
+
+  previousRef       String
+  newRef            String
+  credentialVersion Int
+  reason            String
+  rotatedByUserId   String
+  rotatedAt         DateTime @default(now())
+
+  @@index([previousRef])
+}
+
+/// Every connection test, with its scrubbed outcome. The message is stored
+/// only after the secret has been removed from it.
+model ConnectorTestRun {
+  id          String          @id @default(uuid())
+  connectorId String
+  practiceId  String
+  connector   ConnectorConfig @relation(fields: [connectorId, practiceId], references: [id, practiceId])
+
+  result             ConnectorTestResult
+  message            String
+  credentialVersion  Int
+  runtimeEnvironment ConnectorEnvironment
+  durationMs         Int
+  testedByUserId     String
+  testedAt           DateTime @default(now())
 }

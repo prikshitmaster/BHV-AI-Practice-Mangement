@@ -64,7 +64,10 @@ export type Action =
   // clock that starts only when a partner hears about it starts late.
   | "incident.report"
   // PRV04: assessing CERT-In applicability and recording the report made.
-  | "incident.manage";
+  | "incident.manage"
+  // INT01 (T20): connector configuration and credential references. A
+  // technical control, so IT holds it alongside the practice's partners.
+  | "connector.manage";
 
 /**
  * IAM02 role presets. These are STARTING TEMPLATES — record-level
@@ -87,6 +90,7 @@ const ROLE_CAPABILITIES: Record<PracticeRole, Action[]> = {
     "export.run",
     "user.invite", "user.grant_access",
     "privacy.manage", "incident.report", "incident.manage",
+    "connector.manage",
   ],
   PRACTICE_PARTNER: [
     "client.read", "client.write",
@@ -100,6 +104,7 @@ const ROLE_CAPABILITIES: Record<PracticeRole, Action[]> = {
     "export.run",
     "user.invite", "user.grant_access",
     "privacy.manage", "incident.report", "incident.manage",
+    "connector.manage",
   ],
   MANAGER: [
     "client.read", "client.write",
@@ -153,7 +158,10 @@ const ROLE_CAPABILITIES: Record<PracticeRole, Action[]> = {
   HR: ["incident.report"],
   // PRV04: IT runs the technical side of a cyber incident, so it may assess
   // and record reports — still without any professional data authority.
-  IT_ADMIN: ["system.administer", "user.invite", "incident.report", "incident.manage"],
+  IT_ADMIN: [
+    "system.administer", "user.invite", "incident.report", "incident.manage",
+    "connector.manage",
+  ],
   QUALITY_REVIEWER: [
     "client.read",
     "engagement.read",

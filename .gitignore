@@ -43,8 +43,11 @@ next-env.d.ts
 # prisma generated client
 /src/generated
 
-# claude code local config
-/.claude
+# claude code local config (but track shared project skills so a fresh
+# `git clone` has them immediately — no manual copy/paste needed)
+/.claude/*
+!/.claude/skills/
+!/.claude/skills/**
 
 # backup archives written by T18 (BCP01). Never commit an archive.
 /.backups/
